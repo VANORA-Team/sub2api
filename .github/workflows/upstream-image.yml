@@ -1,0 +1,89 @@
+name: Build upstream image
+
+on:
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if the current upstream commit is already published
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: upstream-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out upstream production
+        uses: actions/checkout@v6
+        with:
+          repository: ranxi2001/sub2api
+          ref: production
+          persist-credentials: false
+
+      - name: Prepare image metadata
+        id: metadata
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "image=ghcr.io/${REPOSITORY_OWNER,,}/sub2api-upstream" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check published image
+        id: check
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          COMMIT: ${{ steps.metadata.outputs.commit }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          build=true
+          if [[ "$FORCE" != "true" ]] &&
+             docker buildx imagetools inspect --raw "$IMAGE:upstream-$COMMIT" > "$RUNNER_TEMP/upstream-manifest.json" 2>/dev/null &&
+             docker buildx imagetools inspect --raw "$IMAGE:latest" > "$RUNNER_TEMP/latest-manifest.json" 2>/dev/null &&
+             cmp -s "$RUNNER_TEMP/upstream-manifest.json" "$RUNNER_TEMP/latest-manifest.json"; then
+            build=false
+            echo "The latest image already matches upstream commit $COMMIT."
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        if: steps.check.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ steps.metadata.outputs.image }}:latest
+            ${{ steps.metadata.outputs.image }}:upstream-${{ steps.metadata.outputs.commit }}
+          build-args: |
+            COMMIT=${{ steps.metadata.outputs.commit }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/ranxi2001/sub2api
+            org.opencontainers.image.revision=${{ steps.metadata.outputs.commit }}
+          cache-from: type=gha,scope=upstream-image
+          cache-to: type=gha,mode=max,scope=upstream-image

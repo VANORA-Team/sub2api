@@ -23,19 +23,19 @@ func http2KeepAliveTestPoolSettings() poolSettings {
 	}
 }
 
-// requireHTTP2Configured 断言 http2 已显式挂到 http.Transport 上。
-// x/net/http2 在 go1.27 && !http2legacy 下是标准库 HTTP/2 的包装：ConfigureTransports 通过
-// Transport.RegisterProtocol("http/2") 注册配置并打开 Protocols.HTTP2（TLSNextProto 不承载 h2 入口），
-// ReadIdleTimeout/PingTimeout 在建连时映射为 http.HTTP2Config.SendPingTimeout/PingTimeout。
+// requireHTTP2Configured 断言标准库 HTTP/2 协商和 PING 健康探测均已启用。
 func requireHTTP2Configured(t *testing.T, tr *http.Transport, msg string) {
 	t.Helper()
 	require.NotNil(t, tr.Protocols, msg)
 	require.True(t, tr.Protocols.HTTP2(), msg)
+	require.NotNil(t, tr.HTTP2, msg)
+	require.Positive(t, tr.HTTP2.SendPingTimeout, msg)
+	require.Positive(t, tr.HTTP2.PingTimeout, msg)
 }
 
 // 长流 / OpenAI 上游改走 HTTP/2 后，池化连接被代理/NAT 静默掐断会成为“死连接”：
 // 两端都以为连接存活，请求落上去会挂到 TCP 重传超时（分钟级）才失败。Go 的
-// http2.Transport 默认 ReadIdleTimeout=0（不发健康 PING），无法检测这种死连接。
+// HTTP2Config 默认 SendPingTimeout=0（不发健康 PING），无法检测这种死连接。
 // 必须显式启用主动 PING 探测，让死连接被提前剔除，而不是只靠 ResponseHeaderTimeout
 // 事后兜底。
 func TestEnableHTTP2KeepAlive_EnablesPingHealthCheck(t *testing.T) {
@@ -49,14 +49,34 @@ func TestEnableHTTP2KeepAlive_EnablesPingHealthCheck(t *testing.T) {
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			tr := &http.Transport{}
-			h2, err := enableHTTP2KeepAlive(tr, tc.mode)
-			require.NoError(t, err)
-			require.NotNil(t, h2, "必须返回已配置的 *http2.Transport")
-			require.Equal(t, tc.readIdleTimeout, h2.ReadIdleTimeout)
-			require.Equal(t, tc.pingTimeout, h2.PingTimeout, "各模式应使用独立的 PING 应答期限")
+			enableHTTP2KeepAlive(tr, tc.mode)
+			require.NotNil(t, tr.HTTP2)
+			require.Equal(t, tc.readIdleTimeout, tr.HTTP2.SendPingTimeout)
+			require.Equal(t, tc.pingTimeout, tr.HTTP2.PingTimeout)
 			requireHTTP2Configured(t, tr, "http2 必须已挂到底层 http.Transport 上")
 		})
 	}
+}
+
+func TestEnableHTTP2KeepAlive_PreservesExistingTransportConfiguration(t *testing.T) {
+	tlsConfig := &tls.Config{ServerName: "upstream.example", MinVersion: tls.VersionTLS12}
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	http2Config := &http.HTTP2Config{MaxReadFrameSize: 64 * 1024}
+	tr := &http.Transport{
+		TLSClientConfig: tlsConfig,
+		Protocols:       protocols,
+		HTTP2:           http2Config,
+	}
+
+	enableHTTP2KeepAlive(tr, upstreamProtocolModeLongStreamH2)
+
+	require.Same(t, tlsConfig, tr.TLSClientConfig)
+	require.Same(t, protocols, tr.Protocols)
+	require.Same(t, http2Config, tr.HTTP2)
+	require.Equal(t, 64*1024, tr.HTTP2.MaxReadFrameSize)
+	require.True(t, tr.Protocols.HTTP1())
+	requireHTTP2Configured(t, tr, "连接健康探测不应覆盖已有的 TLS 和 HTTP/2 配置")
 }
 
 // long_stream_h2 模式构建的 Transport 必须带上 H2 PING 健康探测，从源头剔除死连接。
@@ -64,7 +84,7 @@ func TestBuildUpstreamTransport_LongStreamH2_EnablesPingHealthCheck(t *testing.T
 	tr, err := buildUpstreamTransport(http2KeepAliveTestPoolSettings(), nil, upstreamProtocolModeLongStreamH2)
 	require.NoError(t, err)
 	require.True(t, tr.ForceAttemptHTTP2, "long_stream_h2 必须启用 HTTP/2")
-	requireHTTP2Configured(t, tr, "long_stream_h2 必须显式配置 http2 以启用 ReadIdleTimeout")
+	requireHTTP2Configured(t, tr, "long_stream_h2 必须显式配置 http2 以启用 SendPingTimeout")
 }
 
 // 默认、Grok 和显式 H1 模式不应主动启用 HTTP/2 保活，避免影响其他平台的传输策略。

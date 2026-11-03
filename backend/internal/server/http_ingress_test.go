@@ -53,6 +53,7 @@ func TestProvideHTTPServerEnablesBoundedH2C(t *testing.T) {
 	require.NotNil(t, srv.Protocols)
 	require.True(t, srv.Protocols.UnencryptedHTTP2())
 	require.True(t, srv.Protocols.HTTP1())
+	require.Equal(t, 5*time.Second, srv.IdleTimeout, "h2c idle timeout must not replace the HTTP/1 idle timeout")
 }
 
 func TestConfigureTrustedProxies(t *testing.T) {

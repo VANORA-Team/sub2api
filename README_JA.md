@@ -325,8 +325,8 @@ cd sub2api/deploy
 
 #### 前提条件
 
-- Go 1.21+
-- Node.js 18+
+- Go 1.27.3+
+- Node.js 22.12+（CI と Docker は Node.js 24 を使用）
 - PostgreSQL 15+
 - Redis 6.0+
 

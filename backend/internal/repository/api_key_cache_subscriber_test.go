@@ -20,7 +20,14 @@ func TestAPIKeyCacheSubscriber_BlocksUntilContextCancellation(t *testing.T) {
 	received := make(chan string, 1)
 	returned := make(chan error, 1)
 	go func() {
-		returned <- cache.SubscribeAuthCacheInvalidation(ctx, func(value string) { received <- value })
+		returned <- cache.SubscribeAuthCacheInvalidation(ctx, func(value string) {
+			// Eventually may publish repeatedly; duplicate messages must not
+			// block the test callback and prevent subscriber cancellation.
+			select {
+			case received <- value:
+			default:
+			}
+		})
 	}()
 
 	var value string

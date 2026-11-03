@@ -7,7 +7,7 @@ import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 
-const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite, listCleanupTasks, createCleanupTask, showWarning } = vi.hoisted(() => {
+const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listErrorLogs, routeQuery, writeExcelFile, toBlob, saveAs, listCleanupTasks, createCleanupTask, showWarning } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -26,10 +26,9 @@ const { list, exportList, getStats, getSnapshotV2, getById, getModelStats, listE
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
     routeQuery: {} as Record<string, string>,
-		aoaToSheet: vi.fn(() => ({})),
-		sheetAddAoa: vi.fn(),
+		writeExcelFile: vi.fn(),
+		toBlob: vi.fn(),
 		saveAs: vi.fn(),
-		xlsxWrite: vi.fn(() => new Uint8Array([1, 2, 3])),
   }
 })
 
@@ -82,15 +81,7 @@ vi.mock('@/api/admin/usage', () => ({
 
 vi.mock('file-saver', () => ({ saveAs }))
 
-vi.mock('xlsx', () => ({
-	utils: {
-		aoa_to_sheet: aoaToSheet,
-		sheet_add_aoa: sheetAddAoa,
-		book_new: vi.fn(() => ({})),
-		book_append_sheet: vi.fn(),
-	},
-	write: xlsxWrite,
-}))
+vi.mock('write-excel-file/browser', () => ({ default: writeExcelFile }))
 
 vi.mock('@/api/admin/ops', () => ({
   listErrorLogs,
@@ -844,10 +835,9 @@ describe('admin UsageView model audit export', () => {
 		})
 		getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
 		getModelStats.mockReset().mockResolvedValue({ models: [] })
-		aoaToSheet.mockClear()
-		sheetAddAoa.mockClear()
+		toBlob.mockReset().mockResolvedValue(new Blob(['xlsx']))
+		writeExcelFile.mockReset().mockReturnValue({ toBlob })
 		saveAs.mockClear()
-		xlsxWrite.mockClear()
 	})
 
 	afterEach(() => {
@@ -868,19 +858,45 @@ describe('admin UsageView model audit export', () => {
 			expect.anything()
 		)
 
-		const headers = aoaToSheet.mock.calls[0][0][0]
+		const [sheetData, options] = writeExcelFile.mock.calls[0]
+		expect(options).toEqual({ sheet: 'Usage' })
+		const headers = sheetData[0]
 		expect(headers.slice(4, 8)).toEqual([
 			'Requested model',
 			'Sent upstream model',
 			'Upstream response model',
 			'Upstream model mismatch',
 		])
-		const row = sheetAddAoa.mock.calls[0][1][0]
+		const row = sheetData[1]
 		expect(row.slice(4, 8)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
 		const cacheRateIndex = headers.indexOf('usage.latencyCacheRate')
 		expect(cacheRateIndex).toBe(headers.indexOf('admin.usage.cacheCreationTokens') + 1)
 		expect(row[cacheRateIndex]).toBe('0%')
 		expect(saveAs).toHaveBeenCalledTimes(1)
+		expect(saveAs).toHaveBeenCalledWith(
+			expect.any(Blob),
+			expect.stringMatching(/^usage_.*\.xlsx$/)
+		)
+	})
+
+	it('does not download an export cancelled while the workbook is being generated', async () => {
+		const wrapper = mountRouteFilteredUsageView()
+		vi.advanceTimersByTime(120)
+		await flushPromises()
+
+		let finishWorkbook!: (blob: Blob) => void
+		toBlob.mockImplementationOnce(() => new Promise<Blob>((resolve) => {
+			finishWorkbook = resolve
+		}))
+		const exportPromise = (wrapper.vm as any).exportToExcel()
+		await flushPromises()
+		expect(toBlob).toHaveBeenCalledTimes(1)
+
+		;(wrapper.vm as any).cancelExport()
+		finishWorkbook(new Blob(['xlsx']))
+		await exportPromise
+
+		expect(saveAs).not.toHaveBeenCalled()
 	})
 })
 

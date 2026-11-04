@@ -105,6 +105,28 @@ func TestParseKimiUsageTiers_LimitZero(t *testing.T) {
 	tiers := parseKimiUsageTiers(body)
 	require.Len(t, tiers, 1)
 	require.InDelta(t, 0.0, tiers[0].UsedPercent, 1e-9)
+	require.True(t, tiers[0].Unknown)
+}
+
+func TestPoolCNQuotaDoesNotTreatMissingValuesAsZero(t *testing.T) {
+	now := time.Now()
+	kimi := parseKimiUsageTiers([]byte(`{"limits":[{"detail":{"limit":100}}]}`))
+	require.Len(t, kimi, 1)
+	require.True(t, kimi[0].Unknown)
+	require.Nil(t, poolCNQuotaObservation(&CNProviderQuotaProbeResult{
+		Success: true, FetchedAt: now.Unix(), Tiers: kimi,
+	}, now))
+	updates := cnQuotaExtraUpdates(PlatformKimi, kimi, now)
+	require.Nil(t, updates["kimi_5h_used_percent"])
+	zhipu := parseZhipuTokenTiers(gjson.Parse(`{"limits":[{"type":"TOKENS_LIMIT","unit":3}]}`))
+	require.Len(t, zhipu, 1)
+	require.True(t, zhipu[0].Unknown)
+	credit := parseZhipuTokenTiers(gjson.Parse(`{"limits":[{"type":"CREDIT_LIMIT","percentage":90}]}`))
+	observation := poolCNQuotaObservation(&CNProviderQuotaProbeResult{
+		Success: true, FetchedAt: now.Unix(), Tiers: credit,
+	}, now)
+	require.NotNil(t, observation)
+	require.Equal(t, "credit", observation.Windows[0].Window)
 }
 
 // TestParseZhipuTokenTiers_UnitClassification 显式 unit（3=5h / 6=weekly）优先分类，

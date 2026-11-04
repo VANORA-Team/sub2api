@@ -508,6 +508,8 @@ export default {
         },
         balance: '余额 --',
         window5h: '5h',
+        creditLimit: '信用额度',
+        quotaUnknown: '额度未知',
         windowWeekly: '7d',
         windowMonthly: '月',
         probe: '查询',

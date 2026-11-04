@@ -1,6 +1,10 @@
 package service
 
-import "time"
+import (
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/domain"
+)
 
 // PlatformConcurrencyInfo aggregates concurrency usage by platform.
 type PlatformConcurrencyInfo struct {
@@ -50,22 +54,26 @@ type UserConcurrencyInfo struct {
 
 // PlatformAvailability aggregates account availability by platform.
 type PlatformAvailability struct {
-	Platform       string `json:"platform"`
-	TotalAccounts  int64  `json:"total_accounts"`
-	AvailableCount int64  `json:"available_count"`
-	RateLimitCount int64  `json:"rate_limit_count"`
-	ErrorCount     int64  `json:"error_count"`
+	Platform       string           `json:"platform"`
+	TotalAccounts  int64            `json:"total_accounts"`
+	AvailableCount int64            `json:"available_count"`
+	RateLimitCount int64            `json:"rate_limit_count"`
+	ErrorCount     int64            `json:"error_count"`
+	CodexQuota     PoolQuotaSummary `json:"codex_quota"`
+	PoolQuota      PoolQuotaHealth  `json:"pool_quota"`
 }
 
 // GroupAvailability aggregates account availability by group.
 type GroupAvailability struct {
-	GroupID        int64  `json:"group_id"`
-	GroupName      string `json:"group_name"`
-	Platform       string `json:"platform"`
-	TotalAccounts  int64  `json:"total_accounts"`
-	AvailableCount int64  `json:"available_count"`
-	RateLimitCount int64  `json:"rate_limit_count"`
-	ErrorCount     int64  `json:"error_count"`
+	GroupID        int64            `json:"group_id"`
+	GroupName      string           `json:"group_name"`
+	Platform       string           `json:"platform"`
+	TotalAccounts  int64            `json:"total_accounts"`
+	AvailableCount int64            `json:"available_count"`
+	RateLimitCount int64            `json:"rate_limit_count"`
+	ErrorCount     int64            `json:"error_count"`
+	CodexQuota     PoolQuotaSummary `json:"codex_quota"`
+	PoolQuota      PoolQuotaHealth  `json:"pool_quota"`
 }
 
 // AccountAvailability represents current availability for a single account.
@@ -78,10 +86,17 @@ type AccountAvailability struct {
 
 	Status string `json:"status"`
 
-	IsAvailable   bool `json:"is_available"`
-	IsRateLimited bool `json:"is_rate_limited"`
-	IsOverloaded  bool `json:"is_overloaded"`
-	HasError      bool `json:"has_error"`
+	IsAvailable        bool                      `json:"is_available"`
+	IsRateLimited      bool                      `json:"is_rate_limited"`
+	IsOverloaded       bool                      `json:"is_overloaded"`
+	HasError           bool                      `json:"has_error"`
+	QuotaMonitored     bool                      `json:"quota_monitored"`
+	QuotaUnsupported   bool                      `json:"quota_unsupported"`
+	Quota              *PoolQuotaObservation     `json:"quota,omitempty"`
+	QuotaLastAttemptAt *time.Time                `json:"quota_last_attempt_at,omitempty"`
+	LocalQuota         []domain.MonitorQuotaTier `json:"local_quota,omitempty"`
+	QuotaPoolKey       string                    `json:"-"`
+	codexAccount       *Account
 
 	RateLimitResetAt       *time.Time `json:"rate_limit_reset_at"`
 	RateLimitRemainingSec  *int64     `json:"rate_limit_remaining_sec"`

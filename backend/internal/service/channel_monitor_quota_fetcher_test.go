@@ -701,6 +701,9 @@ func TestUsageQuotaTiers_NilAndEmptyInputs(t *testing.T) {
 		GrokRequestQuota: &xai.QuotaWindow{Limit: &zero, Remaining: &zero},
 	})
 	require.Nil(t, tiers)
+	limit := int64(100)
+	require.Nil(t, usageQuotaTiers(&UsageInfo{GrokRequestQuota: &xai.QuotaWindow{Limit: &limit}}),
+		"a limit without remaining quota is unknown")
 }
 
 // --- 状态推导 ---

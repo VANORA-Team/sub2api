@@ -144,6 +144,7 @@ func TestDuplicateAccountCopiesConfigurationAndResetsRuntimeState(t *testing.T) 
 	source.Extra[UpstreamBillingProbeEnabledExtraKey] = true
 	source.Extra[UpstreamBillingRateSyncEnabledExtraKey] = true
 	source.Extra[UpstreamBillingProbeExtraKey] = map[string]any{"status": "ok"}
+	source.Extra[PoolQuotaSnapshotExtraKey] = map[string]any{"identity": "private"}
 	require.NoError(t, repo.Create(ctx, source))
 
 	duplicate, err := svc.DuplicateAccount(ctx, source.ID, "admin:1", "")

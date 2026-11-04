@@ -74,6 +74,7 @@ func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) 
 			service.OllamaCloudUsageSessionExtraKey:     "ciphertext-secret",
 			service.OllamaCloudUsageAutoRefreshExtraKey: true,
 			service.OllamaCloudUsageSnapshotExtraKey:    snapshot,
+			service.PoolQuotaSnapshotExtraKey:           map[string]any{"identity": "private-digest"},
 			"ordinary":                                  "kept",
 		},
 	}
@@ -82,6 +83,7 @@ func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) 
 	require.NotContains(t, got.Extra, service.OllamaCloudUsageSessionExtraKey)
 	require.NotContains(t, got.Extra, service.OllamaCloudUsageAutoRefreshExtraKey)
 	require.NotContains(t, got.Extra, service.OllamaCloudUsageSnapshotExtraKey)
+	require.NotContains(t, got.Extra, service.PoolQuotaSnapshotExtraKey)
 	require.Equal(t, "kept", got.Extra["ordinary"])
 	require.NotNil(t, got.OllamaCloudUsage)
 	require.True(t, got.OllamaCloudUsage.Configured)
@@ -92,6 +94,7 @@ func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) 
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "ciphertext-secret")
 	require.NotContains(t, string(raw), "secret-key")
+	require.NotContains(t, string(raw), "private-digest")
 	require.Contains(t, src.Extra, service.OllamaCloudUsageSessionExtraKey)
 }
 

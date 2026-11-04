@@ -44,6 +44,26 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 	platform := make(map[string]*PlatformAvailability)
 	group := make(map[int64]*GroupAvailability)
 	account := make(map[int64]*AccountAvailability)
+	platformPoolAccounts := make(map[string]map[string]*AccountAvailability)
+	groupPoolAccounts := make(map[int64]map[string]*AccountAvailability)
+	parentIDs := make([]int64, 0)
+	seenParents := make(map[int64]bool)
+	for i := range accounts {
+		if id := accounts[i].ParentAccountID; id != nil && !seenParents[*id] {
+			seenParents[*id] = true
+			parentIDs = append(parentIDs, *id)
+		}
+	}
+	parents := make(map[int64]*Account)
+	if len(parentIDs) > 0 && s.accountRepo != nil {
+		if loaded, err := s.accountRepo.GetByIDs(ctx, parentIDs); err == nil {
+			for _, parent := range loaded {
+				if parent != nil {
+					parents[parent.ID] = parent
+				}
+			}
+		}
+	}
 
 	for _, acc := range accounts {
 		if acc.ID <= 0 {
@@ -66,6 +86,22 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 		}
 
 		isAvailable := acc.Status == StatusActive && acc.Schedulable && !isRateLimited && !isOverloaded && !isTempUnsched
+		var parent *Account
+		if acc.ParentAccountID != nil {
+			parent = parents[*acc.ParentAccountID]
+		}
+		quota := poolCurrentObservation(&acc, now, parent)
+		localQuota := poolLocalQuota(&acc)
+		var quotaLastAttemptAt *time.Time
+		if snapshot := poolSnapshotFromAccount(&acc); snapshot != nil && snapshot.Identity != "" &&
+			snapshot.Identity == poolAccountIdentity(&acc, parent) && !snapshot.AttemptedAt.IsZero() {
+			quotaLastAttemptAt = &snapshot.AttemptedAt
+		}
+		accountCopy := acc
+		quotaEntry := &AccountAvailability{
+			AccountID: acc.ID, QuotaMonitored: poolAccountMonitored(&acc),
+			Quota: quota, LocalQuota: localQuota, QuotaPoolKey: poolAccountKey(&acc, parent), codexAccount: &accountCopy,
+		}
 
 		if acc.Platform != "" {
 			if _, ok := platform[acc.Platform]; !ok {
@@ -75,6 +111,13 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			}
 			p := platform[acc.Platform]
 			p.TotalAccounts++
+			if !quotaEntry.QuotaMonitored {
+				p.PoolQuota.Unsupported++
+			}
+			if platformPoolAccounts[acc.Platform] == nil {
+				platformPoolAccounts[acc.Platform] = make(map[string]*AccountAvailability)
+			}
+			poolMergeAccount(platformPoolAccounts[acc.Platform], quotaEntry)
 			if isAvailable {
 				p.AvailableCount++
 			}
@@ -99,6 +142,13 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			}
 			g := group[grp.ID]
 			g.TotalAccounts++
+			if !quotaEntry.QuotaMonitored {
+				g.PoolQuota.Unsupported++
+			}
+			if groupPoolAccounts[grp.ID] == nil {
+				groupPoolAccounts[grp.ID] = make(map[string]*AccountAvailability)
+			}
+			poolMergeAccount(groupPoolAccounts[grp.ID], quotaEntry)
 			if isAvailable {
 				g.AvailableCount++
 			}
@@ -125,10 +175,16 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 			GroupName:   displayGroupName,
 			Status:      acc.Status,
 
-			IsAvailable:   isAvailable,
-			IsRateLimited: isRateLimited,
-			IsOverloaded:  isOverloaded,
-			HasError:      hasError,
+			IsAvailable:        isAvailable,
+			IsRateLimited:      isRateLimited,
+			IsOverloaded:       isOverloaded,
+			HasError:           hasError,
+			QuotaMonitored:     poolAccountMonitored(&acc),
+			QuotaUnsupported:   !quotaEntry.QuotaMonitored,
+			Quota:              quota,
+			LocalQuota:         localQuota,
+			QuotaLastAttemptAt: quotaLastAttemptAt,
+			QuotaPoolKey:       quotaEntry.QuotaPoolKey,
 
 			ErrorMessage: acc.ErrorMessage,
 		}
@@ -152,6 +208,22 @@ func (s *OpsService) GetAccountAvailabilityStats(ctx context.Context, platformFi
 		}
 
 		account[acc.ID] = item
+	}
+	for key, entries := range platformPoolAccounts {
+		health := poolHealthFromUniqueAccounts(entries)
+		health.Unsupported = platform[key].PoolQuota.Unsupported
+		platform[key].PoolQuota = health
+		for _, entry := range entries {
+			addCodexPoolQuota(&platform[key].CodexQuota, entry.codexAccount, now, entry.Quota)
+		}
+	}
+	for key, entries := range groupPoolAccounts {
+		health := poolHealthFromUniqueAccounts(entries)
+		health.Unsupported = group[key].PoolQuota.Unsupported
+		group[key].PoolQuota = health
+		for _, entry := range entries {
+			addCodexPoolQuota(&group[key].CodexQuota, entry.codexAccount, now, entry.Quota)
+		}
 	}
 
 	return platform, group, account, &collectedAt, nil

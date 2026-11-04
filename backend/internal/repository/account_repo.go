@@ -72,11 +72,12 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
-	"codex_usage_updated_at":     {},
-	"codex_credits_snapshot":     {},
-	"codex_referral_snapshot":    {},
-	"grok_billing_snapshot":      {},
-	"session_window_utilization": {},
+	"codex_usage_updated_at":          {},
+	service.PoolQuotaSnapshotExtraKey: {},
+	"codex_credits_snapshot":          {},
+	"codex_referral_snapshot":         {},
+	"grok_billing_snapshot":           {},
+	"session_window_utilization":      {},
 }
 
 const postgresParameterBatchSize = 50000
@@ -928,6 +929,7 @@ func lockAndMergeAccountProbeExtra(
 		service.OllamaCloudUsageSnapshotExtraKey,
 		service.OpenCodeGoUsageAutoRefreshExtraKey,
 		service.OpenCodeGoUsageSnapshotExtraKey,
+		service.PoolQuotaSnapshotExtraKey,
 	} {
 		delete(extra, key)
 	}
@@ -989,6 +991,11 @@ func lockAndMergeAccountProbeExtra(
 			return nil, err
 		} else if ok {
 			extra[service.UpstreamBillingProbeExtraKey] = snapshot
+		}
+	}
+	if identityUnchanged {
+		if snapshot, ok := currentExtra[service.PoolQuotaSnapshotExtraKey]; ok && snapshot != nil {
+			extra[service.PoolQuotaSnapshotExtraKey] = snapshot
 		}
 	}
 
@@ -1493,6 +1500,12 @@ func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platfor
 			dbaccount.FieldID,
 			dbaccount.FieldName,
 			dbaccount.FieldPlatform,
+			dbaccount.FieldType,
+			dbaccount.FieldCredentials,
+			dbaccount.FieldExtra,
+			dbaccount.FieldProxyID,
+			dbaccount.FieldParentAccountID,
+			dbaccount.FieldQuotaDimension,
 			dbaccount.FieldConcurrency,
 			dbaccount.FieldLoadFactor,
 			dbaccount.FieldStatus,

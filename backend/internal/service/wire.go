@@ -668,8 +668,18 @@ func ProvideOpsAlertEvaluatorService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	proxyRepo ProxyRepository,
+	accountRepo AccountRepository,
+	usage *AccountUsageService,
+	openai *OpenAIQuotaService,
+	grok *GrokQuotaService,
+	cnQuota *CNProviderQuotaService,
+	cnBalance *CNProviderBalanceService,
+	ollama *OllamaCloudUsageService,
+	leaderLock LeaderLockCache,
+	db *sql.DB,
 ) *OpsAlertEvaluatorService {
 	svc := NewOpsAlertEvaluatorService(opsService, opsRepo, emailService, redisClient, cfg, proxyRepo)
+	svc.poolMonitor = NewPoolQuotaMonitor(opsService, accountRepo, usage, openai, grok, cnQuota, cnBalance, ollama, cfg, leaderLock, db)
 	startBackgroundService(cfg, svc)
 	return svc
 }

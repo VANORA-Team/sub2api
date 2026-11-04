@@ -611,6 +611,7 @@ func TestUpdateAccountExtraDropsManagedBillingProbeFields(t *testing.T) {
 		UpstreamBillingProbeEnabledExtraKey:    true,
 		UpstreamBillingRateSyncEnabledExtraKey: true,
 		UpstreamBillingProbeExtraKey:           map[string]any{"status": "ok"},
+		PoolQuotaSnapshotExtraKey:              map[string]any{"identity": "forged"},
 	})
 
 	require.NoError(t, err)
@@ -618,6 +619,7 @@ func TestUpdateAccountExtraDropsManagedBillingProbeFields(t *testing.T) {
 	require.NotContains(t, repo.accounts[accountID].Extra, UpstreamBillingProbeEnabledExtraKey)
 	require.NotContains(t, repo.accounts[accountID].Extra, UpstreamBillingRateSyncEnabledExtraKey)
 	require.NotContains(t, repo.accounts[accountID].Extra, UpstreamBillingProbeExtraKey)
+	require.NotContains(t, repo.accounts[accountID].Extra, PoolQuotaSnapshotExtraKey)
 }
 
 func TestBulkUpdateAccountsDropsManagedUpstreamBillingProbeState(t *testing.T) {
@@ -630,6 +632,7 @@ func TestBulkUpdateAccountsDropsManagedUpstreamBillingProbeState(t *testing.T) {
 			UpstreamBillingProbeEnabledExtraKey:    true,
 			UpstreamBillingRateSyncEnabledExtraKey: true,
 			UpstreamBillingProbeExtraKey:           map[string]any{"status": "ok"},
+			PoolQuotaSnapshotExtraKey:              map[string]any{"identity": "forged"},
 		},
 	}
 
@@ -642,6 +645,7 @@ func TestBulkUpdateAccountsDropsManagedUpstreamBillingProbeState(t *testing.T) {
 	require.NotContains(t, repo.bulkUpdates[0].Extra, UpstreamBillingProbeEnabledExtraKey)
 	require.NotContains(t, repo.bulkUpdates[0].Extra, UpstreamBillingRateSyncEnabledExtraKey)
 	require.NotContains(t, repo.bulkUpdates[0].Extra, UpstreamBillingProbeExtraKey)
+	require.NotContains(t, repo.bulkUpdates[0].Extra, PoolQuotaSnapshotExtraKey)
 }
 
 func TestBulkUpdateAccountsAcceptsDedicatedUpstreamBillingProbeSetting(t *testing.T) {

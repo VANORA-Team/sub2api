@@ -24,6 +24,15 @@ var validOpsAlertMetricTypes = []string{
 	"memory_usage_percent",
 	"concurrency_queue_depth",
 	"group_available_accounts",
+	"pool_quota_low_accounts",
+	"pool_quota_unknown_accounts",
+	"pool_max_usage_percent",
+	"pool_min_balance_usd",
+	"pool_min_balance_cny",
+	"pool_balance_buffer_ratio",
+	"group_codex_5h_remaining",
+	"group_codex_7d_remaining",
+	"group_codex_unknown_windows",
 	"group_available_ratio",
 	"group_rate_limit_ratio",
 	"account_rate_limited_count",
@@ -94,6 +103,7 @@ func isPercentOrRateMetric(metricType string) bool {
 		"cpu_usage_percent",
 		"memory_usage_percent",
 		"group_available_ratio",
+		"pool_max_usage_percent",
 		"group_rate_limit_ratio",
 		"account_error_ratio":
 		return true

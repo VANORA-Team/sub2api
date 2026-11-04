@@ -431,7 +431,7 @@ func commandCodeFetchFailure(err error) (status int, message string, ok bool) {
 }
 
 // queryCommandCodeUsage 查询 Command Code 积分与窗口，落窗口与余额快照。
-func (s *CNProviderQuotaService) queryCommandCodeUsage(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error) {
+func (s *CNProviderQuotaService) queryCommandCodeUsage(ctx context.Context, account *Account, persist bool) (*CNProviderQuotaProbeResult, error) {
 	client := newCommandCodeUsageClient(s.cfg, s.httpUpstream, account, s.resolveProxyURL(ctx, account))
 	if client.apiKey == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_QUOTA_NO_APIKEY", "account api_key is empty")
@@ -466,6 +466,9 @@ func (s *CNProviderQuotaService) queryCommandCodeUsage(ctx context.Context, acco
 	result.CredentialValid = true
 
 	updates := commandCodeUsageExtraUpdates(usage, tiers, balance, now, true)
+	if !persist {
+		return result, nil
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("cn_quota_persist_failed", "account_id", account.ID, "provider", PlatformCommandCode, "error", err)
 	} else {
@@ -477,7 +480,7 @@ func (s *CNProviderQuotaService) queryCommandCodeUsage(ctx context.Context, acco
 }
 
 // queryCommandCodeBalance 只查积分余额（whoami + credits），落余额快照。
-func (s *CNProviderBalanceService) queryCommandCodeBalance(ctx context.Context, account *Account) (*CNProviderBalanceResult, error) {
+func (s *CNProviderBalanceService) queryCommandCodeBalance(ctx context.Context, account *Account, persist bool) (*CNProviderBalanceResult, error) {
 	client := newCommandCodeUsageClient(s.cfg, s.httpUpstream, account, s.resolveProxyURL(ctx, account))
 	if client.apiKey == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_BALANCE_NO_APIKEY", "account api_key is empty")
@@ -501,6 +504,9 @@ func (s *CNProviderBalanceService) queryCommandCodeBalance(ctx context.Context, 
 		}, nil
 	}
 	result := usage.balance(now)
+	if !persist {
+		return result, nil
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, commandCodeUsageExtraUpdates(usage, nil, result, now, false)); err != nil {
 		slog.Warn("cn_balance_persist_failed", "account_id", account.ID, "provider", PlatformCommandCode, "error", err)
 	} else {

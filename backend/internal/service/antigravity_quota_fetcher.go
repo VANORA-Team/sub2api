@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,7 +142,10 @@ func (f *AntigravityQuotaFetcher) buildUsageInfo(modelsResp *antigravity.FetchAv
 
 	// 遍历所有模型，填充 AntigravityQuota 和 AntigravityQuotaDetails
 	for modelName, modelInfo := range modelsResp.Models {
-		if modelInfo.QuotaInfo == nil {
+		if !validAntigravityQuotaInfo(modelInfo.QuotaInfo) {
+			if modelInfo.QuotaInfo != nil {
+				info.QuotaIncomplete = true
+			}
 			continue
 		}
 
@@ -177,7 +182,7 @@ func (f *AntigravityQuotaFetcher) buildUsageInfo(modelsResp *antigravity.FetchAv
 	// 同时设置 FiveHour 用于兼容展示（取主要模型）
 	priorityModels := []string{"claude-sonnet-4-20250514", "claude-sonnet-4", "gemini-2.5-pro"}
 	for _, modelName := range priorityModels {
-		if modelInfo, ok := modelsResp.Models[modelName]; ok && modelInfo.QuotaInfo != nil {
+		if modelInfo, ok := modelsResp.Models[modelName]; ok && validAntigravityQuotaInfo(modelInfo.QuotaInfo) {
 			utilization := (1.0 - modelInfo.QuotaInfo.RemainingFraction) * 100
 			progress := &UsageProgress{
 				Utilization: utilization,
@@ -195,15 +200,32 @@ func (f *AntigravityQuotaFetcher) buildUsageInfo(modelsResp *antigravity.FetchAv
 
 	if loadResp != nil {
 		for _, credit := range loadResp.GetAvailableCredits() {
+			amount, err := strconv.ParseFloat(strings.TrimSpace(credit.CreditAmount), 64)
+			if err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 {
+				info.QuotaIncomplete = true
+				continue
+			}
+			minimum, minimumErr := strconv.ParseFloat(strings.TrimSpace(credit.MinimumCreditAmountForUsage), 64)
+			minimumKnown := minimumErr == nil && !math.IsNaN(minimum) && !math.IsInf(minimum, 0) && minimum >= 0
+			if !minimumKnown {
+				minimum = 0
+				info.QuotaIncomplete = true
+			}
 			info.AICredits = append(info.AICredits, AICredit{
-				CreditType:     credit.CreditType,
-				Amount:         credit.GetAmount(),
-				MinimumBalance: credit.GetMinimumAmount(),
+				CreditType:          credit.CreditType,
+				Amount:              amount,
+				MinimumBalance:      minimum,
+				MinimumBalanceKnown: minimumKnown,
 			})
 		}
 	}
 
 	return info
+}
+
+func validAntigravityQuotaInfo(quota *antigravity.ModelQuotaInfo) bool {
+	return quota != nil && !quota.MissingFraction && !math.IsNaN(quota.RemainingFraction) &&
+		!math.IsInf(quota.RemainingFraction, 0) && quota.RemainingFraction >= 0 && quota.RemainingFraction <= 1
 }
 
 // GetProxyURL 获取账户的代理 URL

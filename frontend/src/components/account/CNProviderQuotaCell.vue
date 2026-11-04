@@ -7,15 +7,19 @@
     <!-- Tier rows: 5h + weekly utilization bars (snapshot renders on mount).
          复用账号页 UsageProgressBar：同阈值配色、同倒计时格式。 -->
     <div v-if="data?.success && data.tiers?.length" class="space-y-1">
-      <UsageProgressBar
-        v-for="tier in data.tiers"
-        :key="tier.window"
-        data-test="cn-provider-quota-tier"
-        :label="windowLabel(tier.window)"
-        :color="tier.window === 'weekly' ? 'emerald' : 'indigo'"
-        :utilization="tier.used_percent"
-        :resets-at="tier.reset_at"
-      />
+      <template v-for="tier in data.tiers" :key="tier.window">
+        <div v-if="tier.unknown" class="text-[10px] text-amber-600 dark:text-amber-400">
+          {{ tier.kind === 'credit_limit' ? t('admin.accounts.cnProviders.creditLimit') : windowLabel(tier.window) }}: {{ t('admin.accounts.cnProviders.quotaUnknown') }}
+        </div>
+        <UsageProgressBar
+          v-else
+          data-test="cn-provider-quota-tier"
+          :label="tier.kind === 'credit_limit' ? t('admin.accounts.cnProviders.creditLimit') : windowLabel(tier.window)"
+          :color="tier.window === 'weekly' ? 'emerald' : 'indigo'"
+          :utilization="tier.used_percent"
+          :resets-at="tier.reset_at"
+        />
+      </template>
     </div>
 
     <!-- Explicit refresh action (aligned with the OpenAI "Query" / Grok "Probe"
@@ -107,10 +111,10 @@ const snapshotData = computed<CNProviderQuotaProbeResult | null>(() => {
   if (used5h == null && usedWeekly == null && usedMonthly == null) return null
   const tiers: CNProviderQuotaProbeResult['tiers'] = []
   if (used5h != null) {
-    tiers.push({ window: '5h', used_percent: used5h, reset_at: readExtraString(`${platform}_5h_reset_at`) || undefined })
+    tiers.push({ window: '5h', used_percent: used5h, reset_at: readExtraString(`${platform}_5h_reset_at`) || undefined, kind: readExtraString(`${platform}_5h_quota_kind`) || undefined })
   }
   if (usedWeekly != null) {
-    tiers.push({ window: 'weekly', used_percent: usedWeekly, reset_at: readExtraString(`${platform}_weekly_reset_at`) || undefined })
+    tiers.push({ window: 'weekly', used_percent: usedWeekly, reset_at: readExtraString(`${platform}_weekly_reset_at`) || undefined, kind: readExtraString(`${platform}_weekly_quota_kind`) || undefined })
   }
   if (usedMonthly != null) {
     tiers.push({ window: 'monthly', used_percent: usedMonthly, reset_at: readExtraString(`${platform}_monthly_reset_at`) || undefined })

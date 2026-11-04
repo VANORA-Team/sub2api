@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -393,6 +394,36 @@ func TestBuildUsageInfo_AICredits(t *testing.T) {
 	require.Equal(t, "GOOGLE_ONE_AI", info.AICredits[0].CreditType)
 	require.Equal(t, 25.0, info.AICredits[0].Amount)
 	require.Equal(t, 5.0, info.AICredits[0].MinimumBalance)
+	require.True(t, info.AICredits[0].MinimumBalanceKnown)
+}
+
+func TestBuildUsageInfo_RejectsInvalidCreditAmounts(t *testing.T) {
+	fetcher := &AntigravityQuotaFetcher{}
+	models := &antigravity.FetchAvailableModelsResponse{Models: map[string]antigravity.ModelInfo{}}
+	load := &antigravity.LoadCodeAssistResponse{PaidTier: &antigravity.PaidTierInfo{
+		AvailableCredits: []antigravity.AvailableCredit{
+			{CreditType: "invalid", CreditAmount: "unavailable"},
+			{CreditType: "zero", CreditAmount: "0", MinimumCreditAmountForUsage: "0"},
+			{CreditType: "unknown-minimum", CreditAmount: "5", MinimumCreditAmountForUsage: "NaN"},
+		},
+	}}
+	info := fetcher.buildUsageInfo(models, "", "", load)
+	require.Len(t, info.AICredits, 2)
+	require.True(t, info.AICredits[0].MinimumBalanceKnown)
+	require.Zero(t, info.AICredits[0].Amount)
+	require.False(t, info.AICredits[1].MinimumBalanceKnown)
+	require.Zero(t, info.AICredits[1].MinimumBalance)
+	require.True(t, info.QuotaIncomplete)
+}
+
+func TestBuildUsageInfo_DistinguishesMissingAndExhaustedModelQuota(t *testing.T) {
+	var models antigravity.FetchAvailableModelsResponse
+	err := json.Unmarshal([]byte(`{"models":{"unknown":{"quotaInfo":{"resetTime":"2026-11-05T00:00:00Z"}},"empty":{"quotaInfo":{"remainingFraction":0,"resetTime":"2026-11-05T00:00:00Z"}}}}`), &models)
+	require.NoError(t, err)
+	info := (&AntigravityQuotaFetcher{}).buildUsageInfo(&models, "", "", nil)
+	require.NotContains(t, info.AntigravityQuota, "unknown")
+	require.Equal(t, 100, info.AntigravityQuota["empty"].Utilization)
+	require.True(t, info.QuotaIncomplete)
 }
 
 func TestFetchQuotaUsesConfiguredModelsListBodyLimit(t *testing.T) {

@@ -94,6 +94,15 @@ func (s *CNProviderBalanceService) QueryBalance(ctx context.Context, accountID i
 // QueryBalanceForAccount 探测已加载账号（配额监控 fetcher / 周期余额检测复用，
 // 避免二次 GetByID）。singleflight key 与 QueryBalance 相同，按账号 ID 合并。
 func (s *CNProviderBalanceService) QueryBalanceForAccount(ctx context.Context, account *Account) (*CNProviderBalanceResult, error) {
+	return s.queryBalanceWithPersistence(ctx, account, true)
+}
+
+// QueryBalanceForMonitoring does not alter provider balance or scheduler markers.
+func (s *CNProviderBalanceService) QueryBalanceForMonitoring(ctx context.Context, account *Account) (*CNProviderBalanceResult, error) {
+	return s.queryBalanceWithPersistence(ctx, account, false)
+}
+
+func (s *CNProviderBalanceService) queryBalanceWithPersistence(ctx context.Context, account *Account, persist bool) (*CNProviderBalanceResult, error) {
 	if s == nil || s.accountRepo == nil || s.httpUpstream == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "CN_BALANCE_NOT_CONFIGURED", "cn provider balance service is not configured")
 	}
@@ -101,10 +110,13 @@ func (s *CNProviderBalanceService) QueryBalanceForAccount(ctx context.Context, a
 		return nil, err
 	}
 	key := "cn_balance:" + strconv.FormatInt(account.ID, 10)
+	if !persist {
+		key += ":monitor"
+	}
 	resultCh := s.flight.DoChan(key, func() (any, error) {
 		probeCtx, cancel := context.WithTimeout(context.Background(), cnBalanceUpstreamTimeout+5*time.Second)
 		defer cancel()
-		return s.queryBalanceForAccount(probeCtx, account)
+		return s.queryBalanceForAccount(probeCtx, account, persist)
 	})
 	select {
 	case <-ctx.Done():
@@ -122,12 +134,12 @@ func (s *CNProviderBalanceService) QueryBalanceForAccount(ctx context.Context, a
 	}
 }
 
-func (s *CNProviderBalanceService) queryBalanceForAccount(ctx context.Context, account *Account) (*CNProviderBalanceResult, error) {
+func (s *CNProviderBalanceService) queryBalanceForAccount(ctx context.Context, account *Account, persist bool) (*CNProviderBalanceResult, error) {
 	if account.IsCommandCode() {
-		return s.queryCommandCodeBalance(ctx, account)
+		return s.queryCommandCodeBalance(ctx, account, persist)
 	}
 	if account.IsCline() {
-		return s.queryClineBalance(ctx, account)
+		return s.queryClineBalance(ctx, account, persist)
 	}
 	provider := account.Platform
 	if provider != PlatformKimi && provider != PlatformDeepseek {
@@ -225,6 +237,9 @@ func (s *CNProviderBalanceService) queryBalanceForAccount(ctx context.Context, a
 	result.Available = available
 	result.Success = true
 
+	if !persist {
+		return result, nil
+	}
 	updates := cnBalanceExtraUpdates(provider, result, now)
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("cn_balance_persist_failed", "account_id", account.ID, "provider", provider, "error", err)

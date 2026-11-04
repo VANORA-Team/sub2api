@@ -10,6 +10,8 @@ export interface CNQuotaTier {
   window: '5h' | 'weekly' | 'monthly'
   used_percent: number
   reset_at?: string
+  unknown?: boolean
+  kind?: string
 }
 
 /** 额度探测结果（Coding Plan / OpenCode Go / Command Code），对齐后端 CNProviderQuotaProbeResult。 */

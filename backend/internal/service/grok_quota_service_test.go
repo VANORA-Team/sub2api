@@ -1212,6 +1212,22 @@ func TestPreferBillingObservationStatus(t *testing.T) {
 	}
 }
 
+func TestPoolMonitoringGrokBillingDoesNotChangeSchedulerState(t *testing.T) {
+	account := healthyGrokQuotaOAuthAccount(77)
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), &grokHybridUpstream{}, nil)
+	result, err := svc.ProbeBillingForMonitoring(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Billing)
+	require.False(t, result.Persisted)
+	require.Zero(t, repo.updateCalls)
+	require.Zero(t, repo.tempUnschedCalls)
+	require.Zero(t, repo.rateLimitedCalls)
+}
+
 func TestGrokQuotaServiceQueryQuotaFree429PersistsLimitAndKeepsBilling(t *testing.T) {
 	t.Parallel()
 

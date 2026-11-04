@@ -47,6 +47,7 @@ type OpenAIRateLimitWindow struct {
 	LimitWindowSeconds int64   `json:"limit_window_seconds"`
 	ResetAfterSeconds  int64   `json:"reset_after_seconds"`
 	ResetAt            int64   `json:"reset_at"`
+	MissingUsedPercent bool    `json:"-"`
 	decoded            bool
 	usedPresent        bool
 	resetAfterPresent  bool
@@ -67,6 +68,7 @@ func (w *OpenAIRateLimitWindow) UnmarshalJSON(data []byte) error {
 	w.decoded = true
 	w.observedAt = time.Now()
 	w.usedPresent = len(fields["used_percent"]) > 0 && string(fields["used_percent"]) != "null"
+	w.MissingUsedPercent = !w.usedPresent
 	w.resetAfterPresent = len(fields["reset_after_seconds"]) > 0 && string(fields["reset_after_seconds"]) != "null"
 	return nil
 }

@@ -328,15 +328,12 @@ func appendProgressTier(tiers *[]domain.MonitorQuotaTier, window, label string, 
 }
 
 func appendQuotaWindowTier(tiers *[]domain.MonitorQuotaTier, window, label string, q *xai.QuotaWindow) {
-	if q == nil || q.Limit == nil || *q.Limit <= 0 {
+	if q == nil || q.Limit == nil || *q.Limit <= 0 || q.Remaining == nil || *q.Remaining < 0 {
 		return
 	}
-	used := *q.Limit
-	if q.Remaining != nil {
-		used = *q.Limit - *q.Remaining
-		if used < 0 {
-			used = 0
-		}
+	used := *q.Limit - *q.Remaining
+	if used < 0 {
+		used = 0
 	}
 	tier := domain.MonitorQuotaTier{
 		Window:      window,
@@ -394,11 +391,23 @@ func (f *ChannelMonitorQuotaFetcher) fetchCNQuota(ctx context.Context, account *
 	if len(result.Tiers) > 0 {
 		snapshot.Tiers = make([]domain.MonitorQuotaTier, 0, len(result.Tiers))
 		for _, t := range result.Tiers {
+			if t.Unknown {
+				continue
+			}
+			window, label := t.Window, ""
+			if t.Kind == "credit_limit" {
+				window, label = "total", t.Kind
+			}
 			snapshot.Tiers = append(snapshot.Tiers, domain.MonitorQuotaTier{
-				Window:      t.Window,
+				Window:      window,
+				Label:       label,
 				UsedPercent: t.UsedPercent,
 				ResetAt:     t.ResetAt,
 			})
+		}
+		if snapshot.Success && len(snapshot.Tiers) == 0 {
+			snapshot.Success = false
+			snapshot.Error = "quota values unavailable"
 		}
 	}
 	if !snapshot.Success {

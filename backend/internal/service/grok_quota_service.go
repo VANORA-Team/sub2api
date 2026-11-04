@@ -245,7 +245,13 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 // use this method so opening the account list never consumes model quota.
 func (s *GrokQuotaService) ProbeBilling(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
 	return s.runProbeFlight(ctx, "billing:"+strconv.FormatInt(accountID, 10), func(sharedCtx context.Context) (*GrokQuotaProbeResult, error) {
-		return s.probeBilling(sharedCtx, accountID)
+		return s.probeBilling(sharedCtx, accountID, true)
+	})
+}
+
+func (s *GrokQuotaService) ProbeBillingForMonitoring(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
+	return s.runProbeFlight(ctx, "billing-monitor:"+strconv.FormatInt(accountID, 10), func(sharedCtx context.Context) (*GrokQuotaProbeResult, error) {
+		return s.probeBilling(sharedCtx, accountID, false)
 	})
 }
 
@@ -266,7 +272,7 @@ func (s *GrokQuotaService) ProbeMediaEligibility(ctx context.Context, accountID 
 	return eligible, reason, nil
 }
 
-func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
+func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64, persist bool) (*GrokQuotaProbeResult, error) {
 	account, token, proxyURL, err := s.prepareProbe(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -304,8 +310,10 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 		billing.WeeklyStatusCode = weekly.status
 		billing.MonthlyStatusCode = monthly.status
 		billing = xai.StampBillingSummary(billing, preferBillingObservationStatus(weekly.status, monthly.status), "billing_probe")
-		if persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{grokBillingExtraKey: billing}); persistErr != nil {
-			slog.Warn("grok_billing_failure_persist_failed", "account_id", account.ID, "error", persistErr)
+		if persist {
+			if persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{grokBillingExtraKey: billing}); persistErr != nil {
+				slog.Warn("grok_billing_failure_persist_failed", "account_id", account.ID, "error", persistErr)
+			}
 		}
 		return nil, probeErr
 	}
@@ -314,11 +322,16 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 	billing.WeeklyStatusCode = weekly.status
 	billing.MonthlyStatusCode = monthly.status
 	billing = xai.StampBillingSummary(billing, statusCode, "billing_probe")
-	persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
-		grokBillingExtraKey: billing,
-	})
-	if persistErr != nil {
-		slog.Warn("grok_billing_persist_failed", "account_id", account.ID, "error", persistErr)
+	persisted := false
+	if persist {
+		persistErr := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
+			grokBillingExtraKey: billing,
+		})
+		if persistErr != nil {
+			slog.Warn("grok_billing_persist_failed", "account_id", account.ID, "error", persistErr)
+		} else {
+			persisted = true
+		}
 	}
 	now := time.Now().UTC()
 	localUsage24h, localUsage7d, localUsageMonthly := grokLocalUsageForQuota(ctx, s.usageLogRepo, account.ID, billing, now)
@@ -330,7 +343,7 @@ func (s *GrokQuotaService) probeBilling(ctx context.Context, accountID int64) (*
 		LocalUsageMonthly: localUsageMonthly,
 		StatusCode:        statusCode,
 		FetchedAt:         now.Unix(),
-		Persisted:         persistErr == nil,
+		Persisted:         persisted,
 	}, nil
 }
 

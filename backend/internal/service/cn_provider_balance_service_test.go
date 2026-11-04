@@ -128,3 +128,29 @@ func TestCNProviderBalanceService_DeepSeekValidZeroBalanceRemainsSuccessful(t *t
 	require.Len(t, result.Balances, 1)
 	require.Len(t, repo.extraWrites, 1, "a valid upstream zero balance must still be persisted")
 }
+
+func TestPoolMonitoringCNBalanceDoesNotChangeSchedulerState(t *testing.T) {
+	repo := &cnBalanceProbeRepo{account: newDeepSeekBalanceProbeAccount()}
+	upstream := &cnBalanceResponseUpstream{statusCode: http.StatusOK,
+		body: `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"0.2"}]}`}
+	svc := NewCNProviderBalanceService(repo, nil, upstream, nil)
+	result, err := svc.QueryBalanceForMonitoring(context.Background(), repo.account)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.False(t, result.Persisted)
+	require.Empty(t, repo.extraWrites, "monitoring must not clear low-balance or scheduling markers")
+}
+
+func TestPoolMonitoringCNQuotaDoesNotChangeSchedulerState(t *testing.T) {
+	account := codingAccount(PlatformKimi)
+	repo := &cnBalanceProbeRepo{account: account}
+	upstream := &cnBalanceResponseUpstream{statusCode: http.StatusOK,
+		body: `{"limits":[{"detail":{"limit":100,"remaining":10}}]}`}
+	svc := NewCNProviderQuotaService(repo, nil, upstream, nil)
+	result, err := svc.QueryUsageForMonitoring(context.Background(), account)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.False(t, result.Persisted)
+	require.Equal(t, 90.0, result.Tiers[0].UsedPercent)
+	require.Empty(t, repo.extraWrites, "monitoring must not modify scheduler quota snapshots")
+}

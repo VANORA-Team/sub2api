@@ -36,6 +36,7 @@ type OpsAlertEvaluatorService struct {
 	opsRepo      OpsRepository
 	emailService *EmailService
 	proxyRepo    ProxyRepository
+	poolMonitor  *PoolQuotaMonitor
 
 	redisClient *redis.Client
 	cfg         *config.Config
@@ -48,6 +49,7 @@ type OpsAlertEvaluatorService struct {
 
 	mu         sync.Mutex
 	ruleStates map[int64]*opsAlertRuleState
+	emailRetry map[int64]time.Time
 
 	emailLimiter *slidingWindowLimiter
 
@@ -61,6 +63,8 @@ type opsAlertRuleState struct {
 	LastEvaluatedAt     time.Time
 	ConsecutiveBreaches int
 }
+
+type poolAvailabilityCacheKey struct{}
 
 func NewOpsAlertEvaluatorService(
 	opsService *OpsService,
@@ -79,6 +83,7 @@ func NewOpsAlertEvaluatorService(
 		cfg:          cfg,
 		instanceID:   uuid.NewString(),
 		ruleStates:   map[int64]*opsAlertRuleState{},
+		emailRetry:   map[int64]time.Time{},
 		emailLimiter: newSlidingWindowLimiter(0, time.Hour),
 	}
 }
@@ -90,6 +95,9 @@ func (s *OpsAlertEvaluatorService) Start() {
 	s.startOnce.Do(func() {
 		if s.stopCh == nil {
 			s.stopCh = make(chan struct{})
+		}
+		if s.poolMonitor != nil {
+			s.poolMonitor.Start()
 		}
 		s.wg.Add(1)
 		go s.run()
@@ -103,6 +111,9 @@ func (s *OpsAlertEvaluatorService) Stop() {
 	s.stopOnce.Do(func() {
 		if s.stopCh != nil {
 			close(s.stopCh)
+		}
+		if s.poolMonitor != nil {
+			s.poolMonitor.Stop()
 		}
 	})
 	s.wg.Wait()
@@ -163,6 +174,7 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), opsAlertEvaluatorTimeout)
 	defer cancel()
+	ctx = context.WithValue(ctx, poolAvailabilityCacheKey{}, make(map[string]*OpsAccountAvailability))
 
 	if s.opsService != nil && !s.opsService.IsMonitoringEnabled(ctx) {
 		return
@@ -243,8 +255,24 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 			continue
 		}
 
-		if breachedNow && consecutive >= required {
+		if breachedNow {
 			if activeEvent != nil {
+				if !activeEvent.EmailSent && rule.NotifyEmail && s.claimEmailRetry(activeEvent.ID, now) {
+					silenced := false
+					if s.opsService != nil && strings.TrimSpace(scopePlatform) != "" {
+						var silenceErr error
+						silenced, silenceErr = s.opsService.IsAlertSilenced(ctx, rule.ID, scopePlatform, scopeGroupID, scopeRegion, now)
+						if silenceErr != nil {
+							silenced = true
+						}
+					}
+					if !silenced && s.maybeSendAlertEmail(ctx, runtimeCfg, rule, activeEvent) {
+						emailsSent++
+					}
+				}
+				continue
+			}
+			if consecutive < required {
 				continue
 			}
 
@@ -283,6 +311,13 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				FiredAt:        now,
 				CreatedAt:      now,
 			}
+			if strings.HasPrefix(strings.TrimSpace(rule.MetricType), "pool_") && s.opsService != nil {
+				if availability, err := s.poolAvailability(ctx, scopePlatform, scopeGroupID); err == nil && availability != nil {
+					if names := poolAlertAccounts(availability.Accounts, rule); names != "" {
+						firedEvent.Description += "; accounts: " + names
+					}
+				}
+			}
 
 			created, err := s.opsRepo.CreateAlertEvent(ctx, firedEvent)
 			if err != nil {
@@ -292,6 +327,9 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 
 			eventsCreated++
 			if created != nil && created.ID > 0 {
+				if rule.NotifyEmail {
+					s.claimEmailRetry(created.ID, now)
+				}
 				if s.maybeSendAlertEmail(ctx, runtimeCfg, rule, created) {
 					emailsSent++
 				}
@@ -306,12 +344,42 @@ func (s *OpsAlertEvaluatorService) evaluateOnce(interval time.Duration) {
 				logger.LegacyPrintf("service.ops_alert_evaluator", "[OpsAlertEvaluator] resolve event failed (event=%d): %v", activeEvent.ID, err)
 			} else {
 				eventsResolved++
+				s.forgetEmailRetry(activeEvent.ID)
 			}
 		}
 	}
 
 	result := truncateString(fmt.Sprintf("rules=%d enabled=%d evaluated=%d created=%d resolved=%d emails_sent=%d", rulesTotal, rulesEnabled, rulesEvaluated, eventsCreated, eventsResolved, emailsSent), 2048)
 	s.recordHeartbeatSuccess(runAt, time.Since(startedAt), result)
+}
+
+func (s *OpsAlertEvaluatorService) claimEmailRetry(eventID int64, now time.Time) bool {
+	if eventID <= 0 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.emailRetry == nil {
+		s.emailRetry = make(map[int64]time.Time)
+	}
+	if len(s.emailRetry) > 1000 {
+		for id, attempted := range s.emailRetry {
+			if now.Sub(attempted) > 24*time.Hour {
+				delete(s.emailRetry, id)
+			}
+		}
+	}
+	if last := s.emailRetry[eventID]; !last.IsZero() && now.Sub(last) < 5*time.Minute {
+		return false
+	}
+	s.emailRetry[eventID] = now
+	return true
+}
+
+func (s *OpsAlertEvaluatorService) forgetEmailRetry(eventID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.emailRetry, eventID)
 }
 
 func (s *OpsAlertEvaluatorService) pruneRuleStates(rules []*OpsAlertRule) {
@@ -445,6 +513,57 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 		return 0, false
 	}
 	switch strings.TrimSpace(rule.MetricType) {
+	case "pool_quota_low_accounts", "pool_quota_unknown_accounts",
+		"pool_max_usage_percent", "pool_min_balance_usd", "pool_min_balance_cny", "pool_balance_buffer_ratio":
+		if s == nil || s.opsService == nil {
+			return 0, false
+		}
+		availability, err := s.poolAvailability(ctx, platform, groupID)
+		if err != nil || availability == nil {
+			return 0, false
+		}
+		health := poolHealthFromAccounts(availability.Accounts)
+		switch rule.MetricType {
+		case "pool_quota_low_accounts":
+			value := float64(health.Low)
+			if health.Unknown > 0 && !compareMetric(value, rule.Operator, rule.Threshold) {
+				return 0, false
+			}
+			return value, true
+		case "pool_quota_unknown_accounts":
+			return float64(health.Unknown), true
+		default:
+			value, ok := poolObservationMetric(availability.Accounts, rule.MetricType)
+			// Partial observations can trigger a breach, but cannot prove recovery.
+			if ok && poolHasMissingObservation(availability.Accounts) && !compareMetric(value, rule.Operator, rule.Threshold) {
+				return 0, false
+			}
+			return value, ok
+		}
+	case "group_codex_5h_remaining", "group_codex_7d_remaining", "group_codex_unknown_windows":
+		if groupID == nil || *groupID <= 0 || s == nil || s.opsService == nil {
+			return 0, false
+		}
+		availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
+		if err != nil || availability == nil || availability.Group == nil {
+			return 0, false
+		}
+		if rule.MetricType == "group_codex_unknown_windows" {
+			five := availability.Group.CodexQuota.FiveHour
+			seven := availability.Group.CodexQuota.SevenDay
+			// A separate coverage rule warns when remaining-quota rules cannot run.
+			// This upper bound may count an account twice if both windows are missing.
+			return float64(five.Unknown + seven.Unknown), true
+		}
+		window := availability.Group.CodexQuota.FiveHour
+		if rule.MetricType == "group_codex_7d_remaining" {
+			window = availability.Group.CodexQuota.SevenDay
+		}
+		// Partial coverage must never be presented as the complete pool.
+		if window.Known == 0 || window.Unknown != 0 {
+			return 0, false
+		}
+		return window.Remaining, true
 	case "cpu_usage_percent":
 		if systemMetrics != nil && systemMetrics.CPUUsagePercent != nil {
 			return *systemMetrics.CPUUsagePercent, true
@@ -618,6 +737,22 @@ func (s *OpsAlertEvaluatorService) computeRuleMetric(
 	}
 }
 
+func (s *OpsAlertEvaluatorService) poolAvailability(ctx context.Context, platform string, groupID *int64) (*OpsAccountAvailability, error) {
+	key := strings.TrimSpace(platform) + ":"
+	if groupID != nil {
+		key += strconv.FormatInt(*groupID, 10)
+	}
+	cache, _ := ctx.Value(poolAvailabilityCacheKey{}).(map[string]*OpsAccountAvailability)
+	if cached, ok := cache[key]; ok {
+		return cached, nil
+	}
+	availability, err := s.opsService.GetAccountAvailability(ctx, platform, groupID)
+	if err == nil && availability != nil && cache != nil {
+		cache[key] = availability
+	}
+	return availability, err
+}
+
 func compareMetric(value float64, operator string, threshold float64) bool {
 	switch strings.TrimSpace(operator) {
 	case ">":
@@ -691,7 +826,8 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 		return false
 	}
 
-	if len(emailCfg.Alert.Recipients) == 0 {
+	recipients := s.alertRecipients(ctx, emailCfg, rule)
+	if len(recipients) == 0 {
 		return false
 	}
 	if !shouldSendOpsAlertEmailByMinSeverity(strings.TrimSpace(emailCfg.Alert.MinSeverity), strings.TrimSpace(rule.Severity)) {
@@ -711,7 +847,7 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 	body := buildOpsAlertEmailBody(rule, event)
 
 	anySent := false
-	for _, to := range emailCfg.Alert.Recipients {
+	for _, to := range recipients {
 		addr := strings.TrimSpace(to)
 		if addr == "" {
 			continue
@@ -745,6 +881,30 @@ func (s *OpsAlertEvaluatorService) maybeSendAlertEmail(ctx context.Context, runt
 		_ = s.opsRepo.UpdateAlertEventEmailSent(context.Background(), event.ID, true)
 	}
 	return anySent
+}
+
+func (s *OpsAlertEvaluatorService) alertRecipients(ctx context.Context, cfg *OpsEmailNotificationConfig, rule *OpsAlertRule) []string {
+	if cfg == nil {
+		return nil
+	}
+	if len(cfg.Alert.Recipients) > 0 {
+		return cfg.Alert.Recipients
+	}
+	if s == nil || s.opsService == nil || s.opsService.settingRepo == nil || rule == nil {
+		return nil
+	}
+	metric := strings.TrimSpace(rule.MetricType)
+	if !strings.HasPrefix(metric, "pool_") &&
+		!strings.HasPrefix(metric, "group_codex_") {
+		return nil
+	}
+	// Existing account-quota recipients have explicitly opted in to quota
+	// notifications. Respect verification and the global quota toggle.
+	quotaNotify := &BalanceNotifyService{settingRepo: s.opsService.settingRepo}
+	if !quotaNotify.isAccountQuotaNotifyEnabled(ctx) {
+		return nil
+	}
+	return quotaNotify.getAccountQuotaNotifyEmails(ctx)
 }
 
 func opsAlertEmailVariables(rule *OpsAlertRule, event *OpsAlertEvent) map[string]string {

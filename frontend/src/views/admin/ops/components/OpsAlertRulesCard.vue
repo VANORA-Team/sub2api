@@ -62,6 +62,9 @@ interface MetricDefinition {
 
 const groupMetricTypes = new Set<MetricType>([
   'group_available_accounts',
+  'group_codex_5h_remaining',
+  'group_codex_7d_remaining',
+  'group_codex_unknown_windows',
   'group_available_ratio',
   'group_rate_limit_ratio'
 ])
@@ -172,6 +175,81 @@ const metricDefinitions = computed(() => {
     },
 
     // Group-level metrics (requires group_id filter)
+    {
+      type: 'pool_quota_low_accounts',
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.poolLow'),
+      description: t('admin.ops.alertRules.metricDescriptions.poolLow'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'pool_quota_unknown_accounts',
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.poolUnknown'),
+      description: t('admin.ops.alertRules.metricDescriptions.poolUnknown'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
+    {
+      type: 'pool_max_usage_percent',
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.poolMaxUsage'),
+      description: t('admin.ops.alertRules.metricDescriptions.poolMaxUsage'),
+      recommendedOperator: '>=',
+      recommendedThreshold: 80,
+      unit: '%'
+    },
+    {
+      type: 'pool_balance_buffer_ratio',
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.poolBalanceBuffer'),
+      description: t('admin.ops.alertRules.metricDescriptions.poolBalanceBuffer'),
+      recommendedOperator: '<=',
+      recommendedThreshold: 1
+    },
+    {
+      type: 'pool_min_balance_usd',
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.poolMinUsd'),
+      description: t('admin.ops.alertRules.metricDescriptions.poolMinBalance'),
+      recommendedOperator: '<=',
+      recommendedThreshold: 5,
+      unit: ' USD'
+    },
+    {
+      type: 'pool_min_balance_cny',
+      group: 'account',
+      label: t('admin.ops.alertRules.metrics.poolMinCny'),
+      description: t('admin.ops.alertRules.metricDescriptions.poolMinBalance'),
+      recommendedOperator: '<=',
+      recommendedThreshold: 30,
+      unit: ' CNY'
+    },
+    {
+      type: 'group_codex_5h_remaining',
+      group: 'group',
+      label: t('admin.ops.alertRules.metrics.codex5hRemaining'),
+      description: t('admin.ops.alertRules.metricDescriptions.codexRemaining'),
+      recommendedOperator: '<=',
+      recommendedThreshold: 1
+    },
+    {
+      type: 'group_codex_7d_remaining',
+      group: 'group',
+      label: t('admin.ops.alertRules.metrics.codex7dRemaining'),
+      description: t('admin.ops.alertRules.metricDescriptions.codexRemaining'),
+      recommendedOperator: '<=',
+      recommendedThreshold: 1
+    },
+    {
+      type: 'group_codex_unknown_windows',
+      group: 'group',
+      label: t('admin.ops.alertRules.metrics.codexUnknown'),
+      description: t('admin.ops.alertRules.metricDescriptions.codexUnknown'),
+      recommendedOperator: '>',
+      recommendedThreshold: 0
+    },
     {
       type: 'group_available_accounts',
       group: 'group',

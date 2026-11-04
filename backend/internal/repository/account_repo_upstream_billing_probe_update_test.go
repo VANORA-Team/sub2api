@@ -212,7 +212,7 @@ func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil).
 				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot", "opencode_group_unchanged", "opencode_auto", "opencode_snapshot", "current_extra"}).
-					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), false, nil, nil, nil))
+					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`), false, nil, nil, []byte(`{"pool_quota_monitor_snapshot":{"identity":"fresh"}}`)))
 
 			account := &service.Account{
 				ID: 29, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
@@ -221,6 +221,7 @@ func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) 
 					service.OllamaCloudUsageSessionExtraKey:     "forged-ciphertext",
 					service.OllamaCloudUsageAutoRefreshExtraKey: false,
 					service.OllamaCloudUsageSnapshotExtraKey:    map[string]any{"status": "forged"},
+					service.PoolQuotaSnapshotExtraKey:           map[string]any{"identity": "forged"},
 				},
 			}
 			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
@@ -229,10 +230,12 @@ func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) 
 				require.Equal(t, "local-ciphertext", got[service.OllamaCloudUsageSessionExtraKey])
 				require.Equal(t, true, got[service.OllamaCloudUsageAutoRefreshExtraKey])
 				require.Equal(t, map[string]any{"status": "ok"}, got[service.OllamaCloudUsageSnapshotExtraKey])
+				require.Equal(t, map[string]any{"identity": "fresh"}, got[service.PoolQuotaSnapshotExtraKey])
 			} else {
 				require.NotContains(t, got, service.OllamaCloudUsageSessionExtraKey)
 				require.NotContains(t, got, service.OllamaCloudUsageAutoRefreshExtraKey)
 				require.NotContains(t, got, service.OllamaCloudUsageSnapshotExtraKey)
+				require.NotContains(t, got, service.PoolQuotaSnapshotExtraKey)
 			}
 			require.NoError(t, mock.ExpectationsWereMet())
 		})

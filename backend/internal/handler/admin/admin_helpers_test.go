@@ -242,6 +242,25 @@ func TestOpsAlertRuleValidation(t *testing.T) {
 	require.False(t, isPercentOrRateMetric("concurrency_queue_depth"))
 }
 
+func TestPoolQuotaAlertRuleValidation(t *testing.T) {
+	for _, metric := range []string{"pool_quota_low_accounts", "pool_quota_unknown_accounts", "pool_max_usage_percent", "pool_min_balance_usd", "pool_min_balance_cny", "pool_balance_buffer_ratio"} {
+		t.Run(metric, func(t *testing.T) {
+			encoded, err := json.Marshal(metric)
+			require.NoError(t, err)
+			_, err = validateOpsAlertRulePayload(map[string]json.RawMessage{
+				"name": json.RawMessage(`"pool"`), "metric_type": encoded,
+				"operator": json.RawMessage(`">"`), "threshold": json.RawMessage(`1`),
+			})
+			require.NoError(t, err)
+		})
+	}
+	_, err := validateOpsAlertRulePayload(map[string]json.RawMessage{
+		"name": json.RawMessage(`"pool"`), "metric_type": json.RawMessage(`"pool_max_usage_percent"`),
+		"operator": json.RawMessage(`">"`), "threshold": json.RawMessage(`101`),
+	})
+	require.Error(t, err)
+}
+
 func TestOpsWSHelpers(t *testing.T) {
 	prefixes, invalid := parseTrustedProxyList("10.0.0.0/8,invalid")
 	require.Len(t, prefixes, 1)

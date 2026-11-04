@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -33,8 +34,10 @@ const (
 	// Extra 快照键后缀（加 provider 前缀，如 kimi_5h_used_percent）。
 	cnExtraSuffix5hUsed       = "5h_used_percent"
 	cnExtraSuffix5hReset      = "5h_reset_at"
+	cnExtraSuffix5hKind       = "5h_quota_kind"
 	cnExtraSuffixWeeklyUsed   = "weekly_used_percent"
 	cnExtraSuffixWeeklyReset  = "weekly_reset_at"
+	cnExtraSuffixWeeklyKind   = "weekly_quota_kind"
 	cnExtraSuffixMonthlyUsed  = "monthly_used_percent"
 	cnExtraSuffixMonthlyReset = "monthly_reset_at"
 	cnExtraSuffixUsageUpdated = "usage_updated_at"
@@ -48,6 +51,8 @@ type CNQuotaTier struct {
 	Window      string  `json:"window"`             // "5h" | "weekly" | "monthly"
 	UsedPercent float64 `json:"used_percent"`       // 已用百分比（0-100+，不做裁剪）
 	ResetAt     string  `json:"reset_at,omitempty"` // RFC3339，空表示无重置时间
+	Unknown     bool    `json:"unknown,omitempty"`
+	Kind        string  `json:"kind,omitempty"`
 }
 
 // CNProviderQuotaProbeResult 是 Coding Plan 额度探测的返回结构（管理端 + UI 消费）。
@@ -105,6 +110,16 @@ func (s *CNProviderQuotaService) QueryUsage(ctx context.Context, accountID int64
 // QueryUsageForAccount 探测已加载账号（配额监控 fetcher 复用，避免二次 GetByID）。
 // singleflight key 与 QueryUsage 相同，按账号 ID 与 admin 侧并发探测合并。
 func (s *CNProviderQuotaService) QueryUsageForAccount(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error) {
+	return s.queryUsageWithPersistence(ctx, account, true)
+}
+
+// QueryUsageForMonitoring reads the same upstream endpoint without changing
+// scheduler-owned quota snapshots or account state.
+func (s *CNProviderQuotaService) QueryUsageForMonitoring(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error) {
+	return s.queryUsageWithPersistence(ctx, account, false)
+}
+
+func (s *CNProviderQuotaService) queryUsageWithPersistence(ctx context.Context, account *Account, persist bool) (*CNProviderQuotaProbeResult, error) {
 	if s == nil || s.accountRepo == nil || s.httpUpstream == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "CN_QUOTA_NOT_CONFIGURED", "cn provider quota service is not configured")
 	}
@@ -112,10 +127,13 @@ func (s *CNProviderQuotaService) QueryUsageForAccount(ctx context.Context, accou
 		return nil, err
 	}
 	key := "cn_quota:" + strconv.FormatInt(account.ID, 10)
+	if !persist {
+		key += ":monitor"
+	}
 	resultCh := s.flight.DoChan(key, func() (any, error) {
 		probeCtx, cancel := context.WithTimeout(context.Background(), cnQuotaUpstreamTimeout+5*time.Second)
 		defer cancel()
-		return s.queryUsageForAccount(probeCtx, account)
+		return s.queryUsageForAccount(probeCtx, account, persist)
 	})
 	select {
 	case <-ctx.Done():
@@ -133,13 +151,13 @@ func (s *CNProviderQuotaService) QueryUsageForAccount(ctx context.Context, accou
 	}
 }
 
-func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error) {
+func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, account *Account, persist bool) (*CNProviderQuotaProbeResult, error) {
 	provider := account.GetCodingPlanProvider()
 	if provider == PlatformCommandCode {
-		return s.queryCommandCodeUsage(ctx, account)
+		return s.queryCommandCodeUsage(ctx, account, persist)
 	}
 	if provider == PlatformCline {
-		return s.queryClineUsage(ctx, account)
+		return s.queryClineUsage(ctx, account, persist)
 	}
 	if provider != PlatformKimi && provider != PlatformZhipu && provider != PlatformMiniMax && provider != PlatformOpenCodeGo {
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_QUOTA_NOT_CODING_PLAN", "account is not a kimi/zhipu/minimax coding plan or opencode go account")
@@ -271,6 +289,9 @@ func (s *CNProviderQuotaService) queryUsageForAccount(ctx context.Context, accou
 	result.Success = true
 	result.CredentialValid = true
 
+	if !persist {
+		return result, nil
+	}
 	updates := cnQuotaExtraUpdates(provider, tiers, now)
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("cn_quota_persist_failed", "account_id", account.ID, "provider", provider, "error", err)
@@ -392,44 +413,57 @@ func parseKimiUsageTiers(body []byte) []CNQuotaTier {
 			if !detail.Exists() {
 				return true
 			}
-			limit, _ := cnParseF64(detail.Get("limit").Value())
-			remaining, _ := cnParseF64(detail.Get("remaining").Value())
+			limit, limitOK := cnParseF64(detail.Get("limit").Value())
+			remaining, remainingOK := cnParseF64(detail.Get("remaining").Value())
 			used := limit - remaining
 			if used < 0 {
 				used = 0
 			}
 			var util float64
-			if limit > 0 {
+			if validCNQuotaAmounts(limit, remaining, limitOK, remainingOK) {
 				util = used / limit * 100
+				if math.IsInf(util, 0) {
+					util = 100
+				}
 			}
 			tiers = append(tiers, CNQuotaTier{
 				Window:      "5h",
 				UsedPercent: util,
 				ResetAt:     cnNormalizeResetTime(detail.Get("resetTime").Value()),
+				Unknown:     !validCNQuotaAmounts(limit, remaining, limitOK, remainingOK),
 			})
 			return false // 取首个 detail 作为 5h 窗口
 		})
 	}
 
 	if usage := gjson.GetBytes(body, "usage"); usage.Exists() {
-		limit, _ := cnParseF64(usage.Get("limit").Value())
-		remaining, _ := cnParseF64(usage.Get("remaining").Value())
+		limit, limitOK := cnParseF64(usage.Get("limit").Value())
+		remaining, remainingOK := cnParseF64(usage.Get("remaining").Value())
 		used := limit - remaining
 		if used < 0 {
 			used = 0
 		}
 		var util float64
-		if limit > 0 {
+		if validCNQuotaAmounts(limit, remaining, limitOK, remainingOK) {
 			util = used / limit * 100
+			if math.IsInf(util, 0) {
+				util = 100
+			}
 		}
 		tiers = append(tiers, CNQuotaTier{
 			Window:      "weekly",
 			UsedPercent: util,
 			ResetAt:     cnNormalizeResetTime(usage.Get("resetTime").Value()),
+			Unknown:     !validCNQuotaAmounts(limit, remaining, limitOK, remainingOK),
 		})
 	}
 
 	return tiers
+}
+
+func validCNQuotaAmounts(limit, remaining float64, limitOK, remainingOK bool) bool {
+	return limitOK && remainingOK && !math.IsNaN(limit) && !math.IsInf(limit, 0) &&
+		!math.IsNaN(remaining) && !math.IsInf(remaining, 0) && limit > 0 && remaining >= 0
 }
 
 // parseMiniMaxUsageTiers 解析 MiniMax Token Plan / Coding Plan remains 响应。
@@ -456,7 +490,7 @@ func parseMiniMaxUsageTiers(body []byte) []CNQuotaTier {
 	}
 
 	var tiers []CNQuotaTier
-	if remaining, ok := cnParseF64(general.Get("current_interval_remaining_percent").Value()); ok {
+	if remaining, ok := cnParseF64(general.Get("current_interval_remaining_percent").Value()); ok && validRemainingPercent(remaining) {
 		used := 100 - remaining
 		if used < 0 {
 			used = 0
@@ -468,7 +502,7 @@ func parseMiniMaxUsageTiers(body []byte) []CNQuotaTier {
 		})
 	}
 	if general.Get("current_weekly_status").Int() == 1 {
-		if remaining, ok := cnParseF64(general.Get("current_weekly_remaining_percent").Value()); ok {
+		if remaining, ok := cnParseF64(general.Get("current_weekly_remaining_percent").Value()); ok && validRemainingPercent(remaining) {
 			used := 100 - remaining
 			if used < 0 {
 				used = 0
@@ -481,6 +515,10 @@ func parseMiniMaxUsageTiers(body []byte) []CNQuotaTier {
 		}
 	}
 	return tiers
+}
+
+func validRemainingPercent(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 100
 }
 
 func minimaxResetTime(v gjson.Result) string {
@@ -539,6 +577,8 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 		percentage float64
 		resetISO   string
 		unit       int64
+		unknown    bool
+		kind       string
 	}
 	var (
 		fiveHour     entry
@@ -575,8 +615,10 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 			return true
 		}
 		percentage := 0.0
-		if p, ok := cnParseF64(item.Get("percentage").Value()); ok {
+		validPercent := false
+		if p, ok := cnParseF64(item.Get("percentage").Value()); ok && !math.IsNaN(p) && !math.IsInf(p, 0) && p >= 0 {
 			percentage = p
+			validPercent = true
 		}
 		var (
 			resetMs  int64
@@ -594,7 +636,8 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 				hasReset = resetISO != ""
 			}
 		}
-		e := entry{resetMs: resetMs, hasReset: hasReset, percentage: percentage, resetISO: resetISO, unit: item.Get("unit").Int()}
+		e := entry{resetMs: resetMs, hasReset: hasReset, percentage: percentage, resetISO: resetISO,
+			unit: item.Get("unit").Int(), unknown: !validPercent, kind: strings.ToLower(limitType)}
 		if limitType == "TOKENS_LIMIT" {
 			hasTokensLimit = true
 			classify(e.unit, e)
@@ -636,10 +679,10 @@ func parseZhipuTokenTiers(data gjson.Result) []CNQuotaTier {
 
 	var tiers []CNQuotaTier
 	if fiveHourSet {
-		tiers = append(tiers, CNQuotaTier{Window: "5h", UsedPercent: fiveHour.percentage, ResetAt: fiveHour.resetISO})
+		tiers = append(tiers, CNQuotaTier{Window: "5h", UsedPercent: fiveHour.percentage, ResetAt: fiveHour.resetISO, Unknown: fiveHour.unknown, Kind: fiveHour.kind})
 	}
 	if weeklySet {
-		tiers = append(tiers, CNQuotaTier{Window: "weekly", UsedPercent: weekly.percentage, ResetAt: weekly.resetISO})
+		tiers = append(tiers, CNQuotaTier{Window: "weekly", UsedPercent: weekly.percentage, ResetAt: weekly.resetISO, Unknown: weekly.unknown, Kind: weekly.kind})
 	}
 	return tiers
 }
@@ -650,14 +693,32 @@ func cnQuotaExtraUpdates(provider string, tiers []CNQuotaTier, now time.Time) ma
 		cnExtraKey(provider, cnExtraSuffixUsageUpdated): now.Format(time.RFC3339),
 	}
 	for _, t := range tiers {
+		if t.Unknown {
+			switch t.Window {
+			case "5h":
+				updates[cnExtraKey(provider, cnExtraSuffix5hUsed)] = nil
+				updates[cnExtraKey(provider, cnExtraSuffix5hReset)] = nil
+				updates[cnExtraKey(provider, cnExtraSuffix5hKind)] = nil
+			case "weekly":
+				updates[cnExtraKey(provider, cnExtraSuffixWeeklyUsed)] = nil
+				updates[cnExtraKey(provider, cnExtraSuffixWeeklyReset)] = nil
+				updates[cnExtraKey(provider, cnExtraSuffixWeeklyKind)] = nil
+			case "monthly":
+				updates[cnExtraKey(provider, cnExtraSuffixMonthlyUsed)] = nil
+				updates[cnExtraKey(provider, cnExtraSuffixMonthlyReset)] = nil
+			}
+			continue
+		}
 		switch t.Window {
 		case "5h":
 			updates[cnExtraKey(provider, cnExtraSuffix5hUsed)] = t.UsedPercent
+			updates[cnExtraKey(provider, cnExtraSuffix5hKind)] = t.Kind
 			if t.ResetAt != "" {
 				updates[cnExtraKey(provider, cnExtraSuffix5hReset)] = t.ResetAt
 			}
 		case "weekly":
 			updates[cnExtraKey(provider, cnExtraSuffixWeeklyUsed)] = t.UsedPercent
+			updates[cnExtraKey(provider, cnExtraSuffixWeeklyKind)] = t.Kind
 			if t.ResetAt != "" {
 				updates[cnExtraKey(provider, cnExtraSuffixWeeklyReset)] = t.ResetAt
 			}
@@ -701,11 +762,8 @@ func parseOpenCodeGoUsageTiers(body []byte) []CNQuotaTier {
 			continue
 		}
 		used, ok := cnParseF64(percentNode.Value())
-		if !ok {
+		if !ok || math.IsNaN(used) || math.IsInf(used, 0) || used < 0 {
 			continue
-		}
-		if used < 0 {
-			used = 0
 		}
 		tiers = append(tiers, CNQuotaTier{
 			Window:      item.window,

@@ -102,4 +102,14 @@ describe('CNProviderQuotaCell', () => {
     await flushPromises()
     expect(queryQuota).toHaveBeenCalledWith(account.id)
   })
+
+  it('shows an unknown quota instead of a fabricated zero-percent bar', async () => {
+    queryQuota.mockResolvedValue({ success: true, tiers: [{ window: '5h', used_percent: 0, unknown: true }] })
+    const wrapper = mount(CNProviderQuotaCell, { props: { account } })
+    await flushPromises()
+    await wrapper.get('[data-test="cn-provider-quota-probe"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('admin.accounts.cnProviders.quotaUnknown')
+    expect(wrapper.findAllComponents(UsageProgressBar)).toHaveLength(0)
+  })
 })

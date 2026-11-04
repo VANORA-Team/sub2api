@@ -365,12 +365,45 @@ export async function getUserConcurrencyStats(): Promise<OpsUserConcurrencyStats
   return data
 }
 
+export interface PoolQuotaWindow {
+  known: number
+  unknown: number
+  used: number
+  remaining: number
+}
+
+export interface PoolQuotaSummary {
+  five_hour: PoolQuotaWindow
+  seven_day: PoolQuotaWindow
+}
+
+export interface PoolQuotaHealth {
+  known: number
+  unknown: number
+  low: number
+  balance_low: number
+  unsupported: number
+}
+
+export interface PoolQuotaObservation {
+  source: string
+  observed_at: string
+  partial?: boolean
+  windows?: Array<{ window: string; label?: string; used_percent: number; used?: number; limit?: number; reset_at?: string }>
+  balances?: Array<{ currency: string; balance: number }>
+  balance_low?: boolean
+  credits?: Array<{ credit_type?: string; amount?: number; minimum_balance?: number; minimum_balance_known?: boolean }>
+  raw_balance?: string
+}
+
 export interface PlatformAvailability {
   platform: string
   total_accounts: number
   available_count: number
   rate_limit_count: number
   error_count: number
+  codex_quota?: PoolQuotaSummary
+  pool_quota?: PoolQuotaHealth
 }
 
 export interface GroupAvailability {
@@ -381,6 +414,8 @@ export interface GroupAvailability {
   available_count: number
   rate_limit_count: number
   error_count: number
+  codex_quota?: PoolQuotaSummary
+  pool_quota?: PoolQuotaHealth
 }
 
 export interface AccountAvailability {
@@ -399,6 +434,11 @@ export interface AccountAvailability {
   overload_remaining_sec?: number
   has_error: boolean
   error_message?: string
+  quota_monitored?: boolean
+  quota_unsupported?: boolean
+  quota?: PoolQuotaObservation
+  local_quota?: PoolQuotaObservation['windows']
+  quota_last_attempt_at?: string
 }
 
 export interface OpsAccountAvailabilityStatsResponse {
@@ -690,6 +730,15 @@ export type MetricType =
   | 'memory_usage_percent'
   | 'concurrency_queue_depth'
   | 'group_available_accounts'
+  | 'pool_quota_low_accounts'
+  | 'pool_quota_unknown_accounts'
+  | 'pool_max_usage_percent'
+  | 'pool_min_balance_usd'
+  | 'pool_min_balance_cny'
+  | 'pool_balance_buffer_ratio'
+  | 'group_codex_5h_remaining'
+  | 'group_codex_7d_remaining'
+  | 'group_codex_unknown_windows'
   | 'group_available_ratio'
   | 'group_rate_limit_ratio'
   | 'account_rate_limited_count'

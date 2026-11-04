@@ -158,6 +158,7 @@ docs/*
 !docs/PRISM_BRIDGE_RESEARCH_CN.md
 !docs/BATCH_IMAGE_MVP.md
 !docs/COMPOSITE_GROUPS.md
+!docs/ACCOUNT_POOL_QUOTA_MONITORING.md
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md
 !docs/quality-bps-observation.md

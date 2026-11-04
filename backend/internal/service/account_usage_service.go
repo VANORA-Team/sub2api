@@ -177,13 +177,15 @@ type AntigravityModelDetail struct {
 
 // AICredit 表示 Antigravity 账号的 AI Credits 余额信息。
 type AICredit struct {
-	CreditType     string  `json:"credit_type,omitempty"`
-	Amount         float64 `json:"amount,omitempty"`
-	MinimumBalance float64 `json:"minimum_balance,omitempty"`
+	CreditType          string  `json:"credit_type,omitempty"`
+	Amount              float64 `json:"amount,omitempty"`
+	MinimumBalance      float64 `json:"minimum_balance,omitempty"`
+	MinimumBalanceKnown bool    `json:"minimum_balance_known,omitempty"`
 }
 
 // UsageInfo 账号使用量信息
 type UsageInfo struct {
+	QuotaIncomplete    bool           `json:"quota_incomplete,omitempty"`
 	Source             string         `json:"source,omitempty"`               // "passive" or "active"
 	UpdatedAt          *time.Time     `json:"updated_at,omitempty"`           // 更新时间
 	FiveHour           *UsageProgress `json:"five_hour"`                      // 5小时窗口
@@ -509,6 +511,35 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 func (s *AccountUsageService) GetUsageForAccount(ctx context.Context, account *Account, force ...bool) (*UsageInfo, error) {
 	forceProbe := len(force) > 0 && force[0]
 	return s.getUsageForAccount(ctx, account, forceProbe)
+}
+
+// GetUsageForMonitoring avoids writing passive scheduler snapshots or clearing
+// account errors while gathering monitoring data.
+func (s *AccountUsageService) GetUsageForMonitoring(ctx context.Context, account *Account) (*UsageInfo, error) {
+	if s == nil || account == nil {
+		return nil, fmt.Errorf("account usage service is not configured")
+	}
+	switch account.Platform {
+	case PlatformAnthropic:
+		if account.Type == AccountTypeSetupToken || account.IsSyntheticUITest() {
+			return s.getPassiveUsageForAccount(ctx, account)
+		}
+		if !account.CanGetUsage() || s.usageFetcher == nil {
+			return nil, fmt.Errorf("account cannot query usage")
+		}
+		resp, err := s.fetchOAuthUsageRaw(ctx, account)
+		if err != nil || resp == nil {
+			return nil, err
+		}
+		now := time.Now()
+		return s.buildUsageInfo(resp, &now), nil
+	case PlatformGemini:
+		return s.getGeminiUsage(ctx, account)
+	case PlatformAntigravity:
+		return s.getAntigravityUsage(ctx, account)
+	default:
+		return nil, fmt.Errorf("account platform does not support monitoring usage")
+	}
 }
 
 // GetUsageBatch 批量获取账号使用量。

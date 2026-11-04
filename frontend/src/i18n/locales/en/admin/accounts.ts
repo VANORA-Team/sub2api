@@ -228,6 +228,8 @@ export default {
         },
         balance: 'Balance --',
         window5h: '5h',
+        creditLimit: 'Credit limit',
+        quotaUnknown: 'Quota unknown',
         windowWeekly: '7d',
         windowMonthly: '30d',
         probe: 'Query',

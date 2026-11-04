@@ -188,7 +188,7 @@ func clineBalanceResult(usd float64, now time.Time) *CNProviderBalanceResult {
 }
 
 // queryClineBalance 只查积分余额（美元）并落余额快照。
-func (s *CNProviderBalanceService) queryClineBalance(ctx context.Context, account *Account) (*CNProviderBalanceResult, error) {
+func (s *CNProviderBalanceService) queryClineBalance(ctx context.Context, account *Account, persist bool) (*CNProviderBalanceResult, error) {
 	client := newClineAccountClient(s.cfg, s.httpUpstream, account, s.resolveProxyURL(ctx, account), "CN_BALANCE")
 	if client.apiKey == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_BALANCE_NO_APIKEY", "account api_key is empty")
@@ -204,6 +204,9 @@ func (s *CNProviderBalanceService) queryClineBalance(ctx context.Context, accoun
 			Error: "Balance query failed: " + message}, nil
 	}
 	result := clineBalanceResult(usd, now)
+	if !persist {
+		return result, nil
+	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, cnBalanceExtraUpdates(PlatformCline, result, now)); err != nil {
 		slog.Warn("cn_balance_persist_failed", "account_id", account.ID, "provider", PlatformCline, "error", err)
 	} else {
@@ -214,7 +217,7 @@ func (s *CNProviderBalanceService) queryClineBalance(ctx context.Context, accoun
 
 // queryClineUsage 查询 ClinePass 窗口与积分余额，落快照，并按结果设置或解除两个钱包的
 // 冷却（见 applyClineWallets）。余额查询失败不影响窗口结果。
-func (s *CNProviderQuotaService) queryClineUsage(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error) {
+func (s *CNProviderQuotaService) queryClineUsage(ctx context.Context, account *Account, persist bool) (*CNProviderQuotaProbeResult, error) {
 	client := newClineAccountClient(s.cfg, s.httpUpstream, account, s.resolveProxyURL(ctx, account), "CN_QUOTA")
 	if client.apiKey == "" {
 		return nil, infraerrors.New(http.StatusBadRequest, "CN_QUOTA_NO_APIKEY", "account api_key is empty")
@@ -271,6 +274,9 @@ func (s *CNProviderQuotaService) queryClineUsage(ctx context.Context, account *A
 		for key, value := range cnBalanceExtraUpdates(PlatformCline, result.Balance, now) {
 			updates[key] = value
 		}
+	}
+	if !persist {
+		return result, nil
 	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("cn_quota_persist_failed", "account_id", account.ID, "provider", PlatformCline, "error", err)

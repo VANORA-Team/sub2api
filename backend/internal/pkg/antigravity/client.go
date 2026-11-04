@@ -650,6 +650,24 @@ func extractProjectIDFromOnboardResponse(resp map[string]any) string {
 type ModelQuotaInfo struct {
 	RemainingFraction float64 `json:"remainingFraction"`
 	ResetTime         string  `json:"resetTime,omitempty"`
+	MissingFraction   bool    `json:"-"`
+}
+
+func (q *ModelQuotaInfo) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		RemainingFraction *float64 `json:"remainingFraction"`
+		ResetTime         string   `json:"resetTime"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	q.ResetTime = raw.ResetTime
+	q.MissingFraction = raw.RemainingFraction == nil
+	q.RemainingFraction = 0
+	if raw.RemainingFraction != nil {
+		q.RemainingFraction = *raw.RemainingFraction
+	}
+	return nil
 }
 
 // ModelInfo 模型信息

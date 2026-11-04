@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { opsAPI, type OpsAccountAvailabilityStatsResponse, type OpsConcurrencyStatsResponse, type OpsUserConcurrencyStatsResponse } from '@/api/admin/ops'
+import { opsAPI, type OpsAccountAvailabilityStatsResponse, type OpsConcurrencyStatsResponse, type OpsUserConcurrencyStatsResponse, type PoolQuotaSummary, type PoolQuotaHealth, type PoolQuotaObservation } from '@/api/admin/ops'
 
 interface Props {
   platformFilter?: string
@@ -21,6 +21,12 @@ const errorMessage = ref('')
 const concurrency = ref<OpsConcurrencyStatsResponse | null>(null)
 const availability = ref<OpsAccountAvailabilityStatsResponse | null>(null)
 const userConcurrency = ref<OpsUserConcurrencyStatsResponse | null>(null)
+const selectedGroupQuota = computed(() => props.groupIdFilter
+  ? availability.value?.group[String(props.groupIdFilter)]?.codex_quota
+  : undefined)
+const selectedGroupHealth = computed(() => props.groupIdFilter
+  ? availability.value?.group[String(props.groupIdFilter)]?.pool_quota
+  : undefined)
 
 // 用户视图开关
 const showByUser = ref(false)
@@ -64,6 +70,8 @@ interface SummaryRow {
   // 计算字段
   availability_percentage: number
   concurrency_percentage: number
+  codex_quota?: PoolQuotaSummary
+  pool_quota?: PoolQuotaHealth
 }
 
 // 账号详细行数据
@@ -85,6 +93,12 @@ interface AccountRow {
   overload_remaining_sec?: number
   has_error: boolean
   error_message?: string
+  quota_monitored: boolean
+  quota_unsupported: boolean
+  quota_low: boolean
+  quota?: PoolQuotaObservation
+  local_quota?: PoolQuotaObservation['windows']
+  quota_last_attempt_at?: string
 }
 
 // 用户行数据
@@ -123,6 +137,8 @@ const platformRows = computed((): SummaryRow[] => {
       rate_limited_accounts: safeNumber(avail.rate_limit_count),
 
       error_accounts: safeNumber(avail.error_count),
+      codex_quota: avail.codex_quota,
+      pool_quota: avail.pool_quota,
       total_concurrency: totalConcurrency,
       used_concurrency: usedConcurrency,
       waiting_in_queue: safeNumber(conc.waiting_in_queue),
@@ -163,6 +179,8 @@ const groupRows = computed((): SummaryRow[] => {
         rate_limited_accounts: safeNumber(avail.rate_limit_count),
   
         error_accounts: safeNumber(avail.error_count),
+        codex_quota: avail.codex_quota,
+        pool_quota: avail.pool_quota,
         total_concurrency: totalConcurrency,
         used_concurrency: usedConcurrency,
         waiting_in_queue: safeNumber(conc.waiting_in_queue),
@@ -187,18 +205,17 @@ const accountRows = computed((): AccountRow[] => {
       const conc = concStats[aid] || {}
       const avail = availStats[aid] || {}
 
-      // 只显示匹配的分组
-      if (typeof props.groupIdFilter === 'number' && props.groupIdFilter > 0) {
-        if (conc.group_id !== props.groupIdFilter && avail.group_id !== props.groupIdFilter) {
-          return null
-        }
-      }
-
       return {
         key: aid,
         name: String(conc.account_name || avail.account_name || `Account ${aid}`),
         platform: String(conc.platform || avail.platform || ''),
         group_name: String(conc.group_name || avail.group_name || ''),
+        quota_monitored: avail.quota_monitored || false,
+        quota_unsupported: avail.quota_unsupported || false,
+        quota: avail.quota,
+        local_quota: avail.local_quota,
+        quota_last_attempt_at: avail.quota_last_attempt_at,
+        quota_low: isQuotaLow(avail.quota) || (avail.local_quota?.some(window => window.used_percent >= 90) ?? false),
         current_in_use: safeNumber(conc.current_in_use),
         max_capacity: safeNumber(conc.max_capacity),
         waiting_in_queue: safeNumber(conc.waiting_in_queue),
@@ -218,6 +235,12 @@ const accountRows = computed((): AccountRow[] => {
     // 优先显示异常账号
     if (a.has_error !== b.has_error) return a.has_error ? -1 : 1
     if (a.is_rate_limited !== b.is_rate_limited) return a.is_rate_limited ? -1 : 1
+    if (a.quota_low !== b.quota_low) return a.quota_low ? -1 : 1
+    const aUnknown = a.quota_monitored && (!a.quota || a.quota.partial)
+    const bUnknown = b.quota_monitored && (!b.quota || b.quota.partial)
+    if (!!aUnknown !== !!bUnknown) {
+      return aUnknown ? -1 : 1
+    }
     // 然后按负载排序
     return b.load_percentage - a.load_percentage
   })
@@ -328,6 +351,30 @@ function formatDuration(seconds: number): string {
   return `${hours}h`
 }
 
+function quotaSourceLabel(source: string): string {
+  const key = source === 'local_estimate' ? 'poolSourceLocal'
+    : source === 'upstream_snapshot' ? 'poolSourceSnapshot'
+    : source === 'ollama_settings' ? 'poolSourceOllama'
+    : 'poolSourceUpstream'
+  return t(`admin.ops.concurrency.${key}`)
+}
+
+function isQuotaLow(quota?: PoolQuotaObservation): boolean {
+  if (!quota) return false
+  if (quota.balance_low || quota.windows?.some(window => window.window !== 'minute' && window.used_percent >= 90)) return true
+  if (quota.credits?.some(credit => (credit.minimum_balance_known || (credit.minimum_balance ?? 0) > 0) && (credit.amount ?? 0) <= (credit.minimum_balance ?? 0))) return true
+  const buffers = (quota.balances || []).flatMap(balance => {
+    const currency = balance.currency.trim().toUpperCase()
+    return currency === 'USD' ? [balance.balance / 5] : currency === 'CNY' ? [balance.balance / 30] : []
+  })
+  return buffers.length > 0 && Math.max(...buffers) <= 1
+}
+
+function formatQuotaTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
 
 watch(
   () => realtimeEnabled.value,
@@ -381,6 +428,15 @@ watch(
     <!-- 错误提示 -->
     <div v-if="errorMessage" class="mb-3 shrink-0 rounded-xl bg-red-50 p-2.5 text-xs text-red-600 dark:bg-red-900/20 dark:text-red-400">
       {{ errorMessage }}
+    </div>
+    <div v-if="!showByUser && selectedGroupQuota && selectedGroupQuota.five_hour.known + selectedGroupQuota.five_hour.unknown > 0" class="mb-3 rounded-xl bg-gray-50 p-3 text-xs text-gray-600 dark:bg-dark-900 dark:text-gray-300">
+      <div>{{ t('admin.ops.concurrency.codexPoolHint') }}</div>
+      <div v-for="(window, label) in { '5h': selectedGroupQuota.five_hour, '7d': selectedGroupQuota.seven_day }" :key="label">
+        {{ t('admin.ops.concurrency.codexWindow', { window: label, used: window.used.toFixed(2), remaining: window.remaining.toFixed(2), known: window.known, unknown: window.unknown }) }}
+      </div>
+    </div>
+    <div v-if="!showByUser && selectedGroupHealth && selectedGroupHealth.known + selectedGroupHealth.unknown + selectedGroupHealth.unsupported > 0" class="mb-3 rounded-xl bg-blue-50 p-3 text-xs text-gray-700 dark:bg-blue-900/20 dark:text-gray-300" :title="t('admin.ops.concurrency.poolHealthHint')">
+      {{ t('admin.ops.concurrency.poolHealth', { ...selectedGroupHealth }) }}
     </div>
 
     <!-- 禁用状态 -->
@@ -461,6 +517,15 @@ watch(
           </div>
 
           <!-- 进度条 -->
+          <div v-if="row.codex_quota && (row.codex_quota.five_hour.known + row.codex_quota.five_hour.unknown > 0)" class="mb-2 text-[10px] text-gray-600 dark:text-gray-300">
+            <div>{{ t('admin.ops.concurrency.codexPoolHint') }}</div>
+            <div v-for="(window, label) in { '5h': row.codex_quota.five_hour, '7d': row.codex_quota.seven_day }" :key="label">
+              {{ t('admin.ops.concurrency.codexWindow', { window: label, used: window.used.toFixed(2), remaining: window.remaining.toFixed(2), known: window.known, unknown: window.unknown }) }}
+            </div>
+          </div>
+          <div v-if="row.pool_quota && row.pool_quota.known + row.pool_quota.unknown + row.pool_quota.unsupported > 0" class="mb-2 text-[10px] text-gray-600 dark:text-gray-300" :title="t('admin.ops.concurrency.poolHealthHint')">
+            {{ t('admin.ops.concurrency.poolHealth', { ...row.pool_quota }) }}
+          </div>
           <div class="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700">
             <div
               class="h-full rounded-full transition-all duration-300"
@@ -585,6 +650,36 @@ watch(
           <!-- 进度条 -->
           <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700">
             <div class="h-full rounded-full transition-all duration-300" :class="getLoadBarClass(row.load_percentage)" :style="getLoadBarStyle(row.load_percentage)"></div>
+          </div>
+          <div v-if="row.quota_monitored" class="mt-2 space-y-0.5 text-[10px] text-gray-600 dark:text-gray-300">
+            <div v-if="row.quota_low" class="font-semibold text-red-600 dark:text-red-400">{{ t('admin.ops.concurrency.poolLowBadge') }}</div>
+            <template v-if="row.quota">
+              <div class="text-gray-400">{{ t('admin.ops.concurrency.poolObservedAt', { time: formatQuotaTime(row.quota.observed_at), source: quotaSourceLabel(row.quota.source) }) }}</div>
+              <div v-if="row.quota.partial" class="text-amber-600 dark:text-amber-400">{{ t('admin.ops.concurrency.poolPartial') }}</div>
+              <div v-for="(window, index) in row.quota.windows || []" :key="`w-${index}`">
+                {{ t('admin.ops.concurrency.poolWindow', { label: [window.label, window.window].filter(Boolean).join(' / '), percent: window.used_percent.toFixed(1) }) }}
+                <span v-if="window.reset_at" class="text-gray-400"> · {{ formatQuotaTime(window.reset_at) }}</span>
+              </div>
+              <div v-for="(balance, index) in row.quota.balances || []" :key="`b-${index}`">
+                {{ t('admin.ops.concurrency.poolBalance', { currency: balance.currency, amount: balance.balance }) }}
+              </div>
+              <div v-for="(credit, index) in row.quota.credits || []" :key="`c-${index}`">
+                {{ t('admin.ops.concurrency.poolCredit', { type: credit.credit_type || 'AI', amount: credit.amount ?? 0 }) }}
+              </div>
+              <div v-if="row.quota.raw_balance && !row.quota.balances?.length">{{ row.quota.raw_balance }}</div>
+            </template>
+            <div v-else class="text-amber-600 dark:text-amber-400">
+              {{ t('admin.ops.concurrency.poolUnknown') }}
+              <span v-if="row.quota_last_attempt_at"> · {{ t('admin.ops.concurrency.poolLastAttempt', { time: formatQuotaTime(row.quota_last_attempt_at) }) }}</span>
+            </div>
+          </div>
+          <div v-else-if="row.quota_unsupported" class="mt-2 text-[10px] text-gray-400">{{ t('admin.ops.concurrency.poolUnsupported') }}</div>
+          <div v-if="row.local_quota?.length" class="mt-2 text-[10px] text-gray-600 dark:text-gray-300">
+            <div v-if="row.quota_low && !row.quota_monitored" class="font-semibold text-red-600 dark:text-red-400">{{ t('admin.ops.concurrency.poolLowBadge') }}</div>
+            <div class="text-gray-400">{{ t('admin.ops.concurrency.poolLocalLimitHint') }}</div>
+            <div v-for="(window, index) in row.local_quota" :key="`local-${index}`">
+              {{ t('admin.ops.concurrency.poolLocalLimit', { window: window.window, used: window.used ?? 0, limit: window.limit ?? 0, percent: window.used_percent.toFixed(1) }) }}
+            </div>
           </div>
 
           <!-- 等待队列 -->

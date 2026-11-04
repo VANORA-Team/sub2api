@@ -161,21 +161,6 @@ func poolCurrentObservation(account *Account, now time.Time, parents ...*Account
 	return nonEmptyPoolObservation(&result)
 }
 
-func addPoolQuotaHealth(health *PoolQuotaHealth, account *Account, observation *PoolQuotaObservation) {
-	if !poolAccountMonitored(account) {
-		return
-	}
-	evaluable, low := poolObservationLow(observation)
-	if !evaluable {
-		health.Unknown++
-		return
-	}
-	health.Known++
-	if low {
-		health.Low++
-	}
-}
-
 // An RPM window describes burst rate, not stock that can be replenished.
 func poolObservationLow(observation *PoolQuotaObservation) (bool, bool) {
 	if observation == nil {

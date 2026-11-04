@@ -99,7 +99,7 @@ func poolUsageObservation(account *Account, usage *UsageInfo, now time.Time) *Po
 		return nil
 	}
 	if failed, credentialInvalid, _ := usageFailureInfo(usage); failed &&
-		!(account.Platform == PlatformGrok && usage.ErrorCode == errorCodeRateLimited && !credentialInvalid) {
+		(account.Platform != PlatformGrok || usage.ErrorCode != errorCodeRateLimited || credentialInvalid) {
 		return nil
 	}
 

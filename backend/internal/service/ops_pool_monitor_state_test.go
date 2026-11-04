@@ -25,15 +25,17 @@ func TestPoolMonitorSnapshotIdentityExpiryAndThreshold(t *testing.T) {
 	}}
 	current := poolCurrentObservation(account, now)
 	require.NotNil(t, current)
-	var health PoolQuotaHealth
-	addPoolQuotaHealth(&health, account, current)
+	health := poolHealthFromAccounts(map[int64]*AccountAvailability{
+		account.ID: {AccountID: account.ID, QuotaMonitored: true, Quota: current},
+	})
 	require.Equal(t, PoolQuotaHealth{Known: 1, Low: 1}, health)
 
 	// Rotation must never show a previous account's quota as the new one.
 	account.Credentials["access_token"] = "new"
 	require.Nil(t, poolCurrentObservation(account, now))
-	health = PoolQuotaHealth{}
-	addPoolQuotaHealth(&health, account, nil)
+	health = poolHealthFromAccounts(map[int64]*AccountAvailability{
+		account.ID: {AccountID: account.ID, QuotaMonitored: true},
+	})
 	require.Equal(t, int64(1), health.Unknown)
 	account.Credentials["access_token"] = "old"
 	require.Nil(t, poolCurrentObservation(account, now.Add(3*time.Hour)))

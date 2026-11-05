@@ -2,7 +2,7 @@ name: Build upstream image
 
 on:
   schedule:
-    - cron: '17 */2 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       force:

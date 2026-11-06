@@ -381,7 +381,7 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 	cancelControl(context.Canceled)
 	select {
 	case err := <-serverErr:
-		require.True(t, err == nil || isOpenAIWSClientDisconnectError(err), "unexpected disconnect error: %v", err)
+		require.True(t, err == nil || errors.Is(err, context.Canceled) || isOpenAIWSClientDisconnectError(err), "unexpected disconnect error: %v", err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("passthrough ingress did not exit")
 	}

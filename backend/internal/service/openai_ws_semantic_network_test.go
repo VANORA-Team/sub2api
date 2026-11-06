@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -116,7 +117,8 @@ func TestWSSemanticFirstTokenNetwork(t *testing.T) {
 			_ = client.CloseNow()
 			cancel()
 			select {
-			case <-done:
+			case forwardErr := <-done:
+				require.True(t, forwardErr == nil || errors.Is(forwardErr, context.Canceled) || isOpenAIWSClientDisconnectError(forwardErr), "unexpected session error: %v", forwardErr)
 			case <-time.After(time.Second):
 				t.Fatal("forwarder did not stop")
 			}

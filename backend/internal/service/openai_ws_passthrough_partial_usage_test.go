@@ -44,7 +44,12 @@ func TestSmartProtocolPassthroughPartialUsage(t *testing.T) {
 					f.cancel()
 				}
 				select {
-				case <-f.errors:
+				case forwardErr := <-f.errors:
+					if failure == "p1_drain" {
+						require.NoError(t, forwardErr, "the peer-close drain should finish normally")
+					} else {
+						require.Error(t, forwardErr, "a failed or cancelled turn must return its error")
+					}
 				case <-time.After(6 * time.Second):
 					t.Fatal("P1_LIFECYCLE_TIMEOUT")
 				}

@@ -120,7 +120,8 @@ func TestClaudeClientCancelWriteOrFlushPreservesCurrentUsage(t *testing.T) {
 			require.Equal(t, 7, result.usage.CacheReadInputTokens)
 			require.Equal(t, 2, result.usage.OutputTokens)
 			select {
-			case <-producer:
+			case producerErr := <-producer:
+				require.True(t, producerErr == nil || errors.Is(producerErr, io.ErrClosedPipe), "unexpected producer error: %v", producerErr)
 			case <-time.After(time.Second):
 				t.Fatal("upstream reader remained open")
 			}

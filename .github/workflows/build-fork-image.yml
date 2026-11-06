@@ -2,6 +2,12 @@ name: Build fork image
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Source commit to build from main
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -15,13 +21,19 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || 'main' }}
           persist-credentials: false
 
       - name: Prepare image name
         id: metadata
         env:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: echo "image=ghcr.io/${REPOSITORY_OWNER,,}/sub2api" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=ghcr.io/${REPOSITORY_OWNER,,}/sub2api" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -38,12 +50,12 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64
-          tags: ${{ steps.metadata.outputs.image }}:sha-${{ github.sha }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.metadata.outputs.image }}:sha-${{ steps.metadata.outputs.commit }}
           build-args: |
-            COMMIT=${{ github.sha }}
+            COMMIT=${{ steps.metadata.outputs.commit }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.metadata.outputs.commit }}
           cache-from: type=gha,scope=fork-image-amd64
           cache-to: type=gha,mode=max,scope=fork-image-amd64

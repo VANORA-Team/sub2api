@@ -55,7 +55,7 @@
 
 ## 本仓库的维护方向
 
-本仓库是 `ranxi2001/sub2api` 的独立生产 fork，基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) 按需同步。应用功能、上游修复、Release 和生产验证都以 `production` 分支为准；不会用上游默认分支或 tag 直接覆盖本 fork 的生产历史。
+本仓库基于 `ranxi2001/sub2api` 的 `production` 分支，只保留 `main` 作为维护和构建分支，并保留本仓库的依赖安全修复、CI 兼容修复及账号池额度监控。GitHub Actions 每天将上游 `production` 合入 `main`，检查通过后推送并构建镜像；同步方式见[分支与镜像维护说明](docs/FORK_MAINTENANCE.md)。
 
 - **DeepSeek 与 Codex 适配**：支持 Responses 到 Chat Completions 的转换、工具调用历史和上下文压缩兼容。配置模型映射后，可通过切换 API Key 分组使用 DeepSeek，沿用客户端配置。[操作教程](https://tosky.io/docs/?doc=deepseek-switch-group)
 - **账号质量运维**：维护定时答题检测、判题记录、失败处置和自动恢复，支持按模型隔离及全部检测模型失败时移出指定分组。检测结果以实际回答和判题证据为准，不以票据形态判断质量。

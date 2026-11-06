@@ -1,4 +1,4 @@
-name: Build upstream image
+name: Sync upstream and build image
 
 on:
   schedule:
@@ -6,84 +6,107 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: Rebuild even if the current upstream commit is already published
+        description: Build main even when upstream has no new commits
         type: boolean
         default: false
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
-  group: upstream-image
+  group: sync-upstream-main
   cancel-in-progress: false
 
 jobs:
-  build:
+  sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ steps.merge.outputs.commit }}
+      build: ${{ steps.merge.outputs.build }}
     steps:
-      - name: Check out upstream production
+      - name: Check out main
         uses: actions/checkout@v6
         with:
-          repository: ranxi2001/sub2api
-          ref: production
-          persist-credentials: false
+          ref: main
+          fetch-depth: 0
 
-      - name: Prepare image metadata
-        id: metadata
+      - name: Merge upstream production into main
+        id: merge
         env:
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          echo "image=ghcr.io/${REPOSITORY_OWNER,,}/sub2api-upstream" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check published image
-        id: check
-        env:
-          IMAGE: ${{ steps.metadata.outputs.image }}
-          COMMIT: ${{ steps.metadata.outputs.commit }}
           FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          build=true
-          if [[ "$FORCE" != "true" ]] &&
-             docker buildx imagetools inspect --raw "$IMAGE:upstream-$COMMIT" > "$RUNNER_TEMP/upstream-manifest.json" 2>/dev/null &&
-             docker buildx imagetools inspect --raw "$IMAGE:latest" > "$RUNNER_TEMP/latest-manifest.json" 2>/dev/null &&
-             cmp -s "$RUNNER_TEMP/upstream-manifest.json" "$RUNNER_TEMP/latest-manifest.json"; then
-            build=false
-            echo "The latest image already matches upstream commit $COMMIT."
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags https://github.com/ranxi2001/sub2api.git production
+          upstream=$(git rev-parse FETCH_HEAD)
+          build=false
+          if ! git merge-base --is-ancestor "$upstream" HEAD; then
+            if ! git merge --no-edit "$upstream"; then
+              echo "::error::Upstream conflicts with main. Resolve the merge while retaining the fork changes; main has not been pushed."
+              exit 1
+            fi
+            build=true
+          elif [[ "$FORCE" == "true" ]]; then
+            build=true
           fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Upstream production: $upstream" >> "$GITHUB_STEP_SUMMARY"
+          echo "Main source: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build and push image
-        if: steps.check.outputs.build == 'true'
-        uses: docker/build-push-action@v6
+      - name: Set up Go
+        if: steps.merge.outputs.build == 'true'
+        uses: actions/setup-go@v6
         with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ steps.metadata.outputs.image }}:latest
-            ${{ steps.metadata.outputs.image }}:upstream-${{ steps.metadata.outputs.commit }}
-          build-args: |
-            COMMIT=${{ steps.metadata.outputs.commit }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.url=https://github.com/ranxi2001/sub2api
-            org.opencontainers.image.revision=${{ steps.metadata.outputs.commit }}
-          cache-from: type=gha,scope=upstream-image
-          cache-to: type=gha,mode=max,scope=upstream-image
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Check backend integration and fork regressions
+        if: steps.merge.outputs.build == 'true'
+        working-directory: backend
+        run: |
+          go build ./cmd/server
+          go test -tags=unit ./internal/service ./internal/repository ./internal/handler/admin ./migrations \
+            -run 'Test(Pool|.*Pool|OpenAIQuota|CNProvider|.*Cline|.*CommandCode|.*Zhipu|.*HTTP2|.*HTTPUpstream|.*UpstreamBilling|.*AccountExtra)' -count=1
+
+      - name: Set up pnpm
+        if: steps.merge.outputs.build == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        if: steps.merge.outputs.build == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Check frontend integration and fork regressions
+        if: steps.merge.outputs.build == 'true'
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+          pnpm test:run src/views/admin/ops/components/__tests__/OpsConcurrencyPoolQuota.spec.ts \
+            src/components/account/__tests__/CNProviderQuotaCell.spec.ts \
+            src/views/admin/__tests__/UsageView.spec.ts
+
+      - name: Push updated main
+        if: steps.merge.outputs.build == 'true'
+        run: git push origin HEAD:refs/heads/main
+
+  image:
+    needs: sync
+    if: needs.sync.outputs.build == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-fork-image.yml
+    with:
+      ref: ${{ needs.sync.outputs.commit }}

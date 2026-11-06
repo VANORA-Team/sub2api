@@ -921,6 +921,7 @@ func ProvideOpsService(
 	svc.authCacheInvalidationWorker = authCacheInvalidationWorker
 	svc.apiKeyService = apiKeyService
 	svc.StartRuntimeSettingsRefresh(context.Background())
+	svc.StartAIOpsController(context.Background())
 	return svc
 }
 
@@ -998,6 +999,7 @@ func ProvideAPIKeyService(
 	billingCacheService *BillingCacheService,
 	concurrencyService *ConcurrencyService,
 	authority RegionalAuthAuthority,
+	autoCredit AutoCreditRepository,
 ) (*APIKeyService, error) {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
@@ -1020,7 +1022,25 @@ func ProvideAPIKeyService(
 			svc.localAuth = reader
 		}
 	}
+	if cfg == nil || cfg.Runtime.Role != config.RuntimeRoleGateway {
+		svc.SetAutoCredit(autoCredit, billingCacheService)
+	}
 	return svc, nil
+}
+
+// ProvideAPIKeyServiceWithGroupProtection keeps the existing constructor compatible.
+func ProvideAPIKeyServiceWithGroupProtection(
+	apiKeyRepo APIKeyRepository, userRepo UserRepository, groupRepo GroupRepository,
+	userSubRepo UserSubscriptionRepository, userGroupRateRepo UserGroupRateRepository,
+	cache APIKeyCache, cfg *config.Config, billingCacheService *BillingCacheService,
+	concurrencyService *ConcurrencyService, authority RegionalAuthAuthority,
+	autoCredit AutoCreditRepository, protection *GroupAntiDistillationService,
+) (*APIKeyService, error) {
+	svc, err := ProvideAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg, billingCacheService, concurrencyService, authority, autoCredit)
+	if err == nil {
+		svc.groupAntiDistillation = protection
+	}
+	return svc, err
 }
 
 // ProviderSet is the Wire provider set for all services
@@ -1031,7 +1051,8 @@ var ProviderSet = wire.NewSet(
 	ProvideAuthService,
 	NewPasskeyService,
 	NewUserService,
-	ProvideAPIKeyService,
+	ProvideAPIKeyServiceWithGroupProtection,
+	NewGroupAntiDistillationService,
 	NewSecurityPenaltyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	ProvideAuthCacheInvalidationWorker,
@@ -1190,9 +1211,11 @@ func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRep
 }
 
 // ProvideBalanceNotifyService creates BalanceNotifyService
-func ProvideBalanceNotifyService(emailService *EmailService, settingRepo SettingRepository, accountRepo AccountRepository, notificationEmailService *NotificationEmailService) *BalanceNotifyService {
+func ProvideBalanceNotifyService(emailService *EmailService, settingRepo SettingRepository, accountRepo AccountRepository, notificationEmailService *NotificationEmailService, db *sql.DB, cfg *config.Config, users UserRepository) *BalanceNotifyService {
 	svc := NewBalanceNotifyService(emailService, settingRepo, accountRepo)
 	svc.SetNotificationEmailService(notificationEmailService)
+	svc.forecast = NewBalanceForecastService(db, settingRepo, users, notificationEmailService)
+	startBackgroundService(cfg, svc.forecast)
 	return svc
 }
 

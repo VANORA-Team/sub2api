@@ -850,7 +850,8 @@ func TestOpenAIWSPassthroughLaterTurnAdmission(t *testing.T) {
 				require.Equal(t, 2, <-after)
 				_ = client.CloseNow()
 				select {
-				case <-done:
+				case forwardErr := <-done:
+					require.True(t, forwardErr == nil || errors.Is(forwardErr, context.Canceled) || isOpenAIWSClientDisconnectError(forwardErr), "unexpected session error: %v", forwardErr)
 				case <-time.After(4 * time.Second):
 					t.Fatal("relay did not stop")
 				}

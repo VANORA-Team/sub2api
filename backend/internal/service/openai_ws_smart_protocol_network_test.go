@@ -391,7 +391,8 @@ func TestSmartProtocolNoReplayAndCleanup(t *testing.T) {
 					}
 				}
 				select {
-				case <-f.errors:
+				case forwardErr := <-f.errors:
+					require.NotErrorIs(t, forwardErr, context.DeadlineExceeded, "failed-turn cleanup must finish before the test deadline")
 				case <-f.ctx.Done():
 					t.Fatal("failed turn cleanup stalled")
 				}
@@ -648,7 +649,8 @@ func TestSmartProtocolActualContentNetwork(t *testing.T) {
 				require.EqualValues(t, 1, f.httpCalls.Load()+f.wsCalls.Load(), "one generation, independent of semantic/content availability")
 				_ = c.CloseNow()
 				select {
-				case <-f.errors:
+				case forwardErr := <-f.errors:
+					require.NotErrorIs(t, forwardErr, context.DeadlineExceeded, "content-session cleanup must finish before the test deadline")
 				case <-f.ctx.Done():
 					t.Fatal("content session cleanup stalled")
 				}

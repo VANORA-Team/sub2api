@@ -71,7 +71,8 @@ func TestAPIKeyCacheSubscriberReportsAutomaticResubscription(t *testing.T) {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case subscriberErr := <-done:
+			require.ErrorIs(t, subscriberErr, context.Canceled)
 		case <-time.After(time.Second):
 			t.Error("subscriber cleanup did not finish")
 		}

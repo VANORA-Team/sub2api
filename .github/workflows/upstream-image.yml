@@ -32,17 +32,21 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # Upstream merges can modify .github/workflows, which GITHUB_TOKEN cannot push.
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
 
       - name: Merge upstream production into main
         id: merge
         env:
           FORCE: ${{ inputs.force }}
+          HAS_UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN != '' }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch --no-tags https://github.com/ranxi2001/sub2api.git production
           upstream=$(git rev-parse FETCH_HEAD)
+          before=$(git rev-parse HEAD)
           build=false
           if ! git merge-base --is-ancestor "$upstream" HEAD; then
             if ! git merge --no-edit "$upstream"; then
@@ -52,6 +56,10 @@ jobs:
             build=true
           elif [[ "$FORCE" == "true" ]]; then
             build=true
+          fi
+          if [[ "$HAS_UPSTREAM_SYNC_TOKEN" != "true" ]] && ! git diff --quiet "$before" HEAD -- .github/workflows; then
+            echo "::error::Upstream changes workflow files. Configure the UPSTREAM_SYNC_TOKEN Actions secret with Contents and Workflows write permissions for this repository; GITHUB_TOKEN cannot push these changes. Main has not been pushed."
+            exit 1
           fi
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"

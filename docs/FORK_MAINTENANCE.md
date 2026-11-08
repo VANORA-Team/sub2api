@@ -11,6 +11,18 @@ frontend, pushes the successful merge to `main`, and builds the resulting commit
 It does not create branches. Merge conflicts or failed checks stop the update
 before the push; resolve them while retaining the fork changes.
 
+For unattended updates that change `.github/workflows`, configure the repository
+Actions secret `UPSTREAM_SYNC_TOKEN` with a fine-grained personal access token
+limited to this repository, granting **Contents: Read and write** and
+**Workflows: Read and write**. The checkout action uses this token for Git
+operations. Without it, the job falls back to `GITHUB_TOKEN`, which can push
+ordinary source changes but cannot push changes to workflow files, even with
+`contents: write`. If a merge changes workflows while this secret is missing,
+the job stops before builds and explains how to configure it. Repository policy
+currently disables SSH deploy keys. Do not copy a developer's GitHub CLI login
+token into Actions. Image publication continues to use the job's `GITHUB_TOKEN`
+with `packages: write`.
+
 The image is `ghcr.io/vanora-team/sub2api:sha-<full main commit>`, with amd64 and
 arm64 variants. The separate `Build fork image` workflow can rebuild `main`
 manually without syncing upstream. OCI revision labels identify the source

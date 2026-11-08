@@ -76,6 +76,10 @@ const props = defineProps<{
   account: Account
 }>()
 
+const emit = defineEmits<{
+  probed: [result: CNProviderQuotaProbeResult]
+}>()
+
 const { t } = useI18n()
 
 const visible = computed(() => cnQuotaCellVisible(props.account))
@@ -179,6 +183,7 @@ const handleProbe = async () => {
     // 失败时保留已渲染的快照条形图（仅显示错误行），成功才覆盖。
     if (result.success) {
       data.value = result
+      emit('probed', result)
     } else {
       error.value = result.error || t('common.error')
     }

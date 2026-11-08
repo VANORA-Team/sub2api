@@ -27,15 +27,18 @@ var (
 	ErrNoUpdateAvailable         = infraerrors.Conflict("ALREADY_UP_TO_DATE", "no update available; current version is latest")
 	ErrRollbackVersionNotAllowed = infraerrors.BadRequest("ROLLBACK_VERSION_NOT_ALLOWED", "version is not in the allowed rollback list")
 	ErrSystemRestartRequired     = infraerrors.Conflict("SYSTEM_RESTART_REQUIRED", "an update or rollback is already installed; restart the service before another update or rollback")
+	ErrSelfUpdateDisabled        = infraerrors.Forbidden("SELF_UPDATE_DISABLED", "container updates and rollbacks are managed through "+updateRepositoryURL)
 )
 
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	// Releases are maintained on the owner-controlled production fork. Keep the
-	// updater independent from the upstream repository so production installs
-	// see our release stream and can update to our fork's assets.
-	githubRepo = "ranxi2001/sub2api"
+	// Standalone installs must only use this fork's releases. Container installs
+	// bypass release lookups and are updated by replacing the image.
+	githubRepo          = "VANORA-Team/sub2api"
+	updateRepositoryURL = "https://github.com/" + githubRepo
+	updateModeInline    = "inline"
+	updateModeExternal  = "external"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -70,17 +73,23 @@ type UpdateService struct {
 	githubClient    GitHubReleaseClient
 	currentVersion  string
 	buildType       string // "source" for manual builds, "release" for CI builds
+	updateMode      string // "external" for image-managed deployments
 	installMu       sync.Mutex
 	restartRequired bool
 }
 
 // NewUpdateService creates a new UpdateService
 func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string) *UpdateService {
+	updateMode := updateModeInline
+	if os.Getenv("SUB2API_UPDATE_MODE") == updateModeExternal {
+		updateMode = updateModeExternal
+	}
 	return &UpdateService{
 		cache:          cache,
 		githubClient:   githubClient,
 		currentVersion: version,
 		buildType:      buildType,
+		updateMode:     updateMode,
 	}
 }
 
@@ -93,6 +102,8 @@ type UpdateInfo struct {
 	Cached         bool         `json:"cached"`
 	Warning        string       `json:"warning,omitempty"`
 	BuildType      string       `json:"build_type"` // "source" or "release"
+	UpdateMode     string       `json:"update_mode"`
+	RepositoryURL  string       `json:"repository_url"`
 }
 
 // ReleaseInfo contains GitHub release details
@@ -138,6 +149,17 @@ type GitHubAsset struct {
 
 // CheckUpdate checks for available updates
 func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInfo, error) {
+	if s.updateMode == updateModeExternal {
+		// Do not read legacy release caches or contact GitHub from containers.
+		return &UpdateInfo{
+			CurrentVersion: s.currentVersion,
+			LatestVersion:  s.currentVersion,
+			BuildType:      s.buildType,
+			UpdateMode:     s.updateMode,
+			RepositoryURL:  updateRepositoryURL,
+		}, nil
+	}
+
 	// Try cache first
 	if !force {
 		if cached, err := s.getFromCache(ctx); err == nil && cached != nil {
@@ -159,6 +181,8 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			HasUpdate:      false,
 			Warning:        err.Error(),
 			BuildType:      s.buildType,
+			UpdateMode:     s.updateMode,
+			RepositoryURL:  updateRepositoryURL,
 		}, nil
 	}
 
@@ -170,6 +194,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate downloads and applies the update
 // Uses atomic file replacement pattern for safe in-place updates
 func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	if s.updateMode == updateModeExternal {
+		return ErrSelfUpdateDisabled
+	}
 	if err := s.checkRestartRequired(); err != nil {
 		return err
 	}
@@ -311,6 +338,9 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if s.updateMode == updateModeExternal {
+		return ErrSelfUpdateDisabled
+	}
 	s.installMu.Lock()
 	defer s.installMu.Unlock()
 	if s.restartRequired {
@@ -344,6 +374,9 @@ func (s *UpdateService) Rollback() error {
 // strictly older than the current version (the current version itself is excluded),
 // newest first. Draft and prerelease entries are skipped.
 func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVersion, error) {
+	if s.updateMode == updateModeExternal {
+		return []RollbackVersion{}, nil
+	}
 	releases, err := s.fetchRollbackCandidates(ctx)
 	if err != nil {
 		return nil, err
@@ -364,6 +397,9 @@ func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVer
 // The target must be one of the versions returned by ListRollbackVersions;
 // anything else (including the current version) is rejected.
 func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) error {
+	if s.updateMode == updateModeExternal {
+		return ErrSelfUpdateDisabled
+	}
 	if err := s.checkRestartRequired(); err != nil {
 		return err
 	}
@@ -468,8 +504,10 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 			HTMLURL:     release.HTMLURL,
 			Assets:      assets,
 		},
-		Cached:    false,
-		BuildType: s.buildType,
+		Cached:        false,
+		BuildType:     s.buildType,
+		UpdateMode:    s.updateMode,
+		RepositoryURL: updateRepositoryURL,
 	}, nil
 }
 
@@ -641,12 +679,17 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	var cached struct {
+		Repository  string       `json:"repository"`
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
 	}
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
+	}
+
+	if cached.Repository != githubRepo {
+		return nil, fmt.Errorf("cache belongs to a different update repository")
 	}
 
 	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
@@ -660,15 +703,19 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		ReleaseInfo:    cached.ReleaseInfo,
 		Cached:         true,
 		BuildType:      s.buildType,
+		UpdateMode:     s.updateMode,
+		RepositoryURL:  updateRepositoryURL,
 	}, nil
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
+		Repository  string       `json:"repository"`
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
 	}{
+		Repository:  githubRepo,
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),

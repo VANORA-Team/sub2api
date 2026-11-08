@@ -10,7 +10,7 @@
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="externalUpdates ? t('version.containerMode') : hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -42,6 +42,7 @@
               t('version.currentVersion')
             }}</span>
             <button
+              v-if="!externalUpdates"
               @click="refreshVersion(true)"
               class="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-dark-200"
               :disabled="loading"
@@ -89,7 +90,7 @@
                   <span v-else class="text-2xl font-bold text-gray-400 dark:text-dark-500">--</span>
                   <!-- Show check mark when up to date -->
                   <span
-                    v-if="!hasUpdate"
+                    v-if="!externalUpdates && !hasUpdate"
                     class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                   >
                     <svg
@@ -107,15 +108,32 @@
                 </div>
                 <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">
                   {{
-                    hasUpdate
+                    externalUpdates
+                      ? t('version.containerMode')
+                      : hasUpdate
                       ? t('version.latestVersion') + ': v' + latestVersion
                       : t('version.upToDate')
                   }}
                 </p>
               </div>
 
+              <div v-if="externalUpdates" class="space-y-3">
+                <p class="text-xs text-gray-500 dark:text-dark-400">
+                  {{ t('version.containerModeHint') }}
+                </p>
+                <a
+                  :href="repositoryUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600"
+                >
+                  {{ t('version.viewRepository') }}
+                  <Icon name="externalLink" size="sm" :stroke-width="2" />
+                </a>
+              </div>
+
               <!-- Priority 1: Update error (must check before hasUpdate) -->
-              <div v-if="updateError" class="space-y-2">
+              <div v-else-if="updateError" class="space-y-2">
                 <div
                   class="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800/50 dark:bg-red-900/20"
                 >
@@ -650,10 +668,7 @@ import {
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
-
-const GITHUB_REPO = 'Wei-Shaw/sub2api'
-// Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
-const DOCKER_IMAGE = 'weishaw/sub2api'
+import { GITHUB_REPO, DOCKER_IMAGE } from '@/config/repository'
 
 const { t } = useI18n()
 
@@ -673,7 +688,9 @@ const dropdownRef = ref<HTMLElement | null>(null)
 const loading = computed(() => appStore.versionLoading)
 const currentVersion = computed(() => appStore.currentVersion || props.version || '')
 const latestVersion = computed(() => appStore.latestVersion)
-const hasUpdate = computed(() => appStore.hasUpdate)
+const externalUpdates = computed(() => appStore.updateMode === 'external')
+const repositoryUrl = computed(() => appStore.repositoryUrl)
+const hasUpdate = computed(() => !externalUpdates.value && appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
 
@@ -729,7 +746,7 @@ const activeManualCommand = computed(() =>
 )
 
 // Only show update check for release builds (binary/docker deployment)
-const isReleaseBuild = computed(() => buildType.value === 'release')
+const isReleaseBuild = computed(() => !externalUpdates.value && buildType.value === 'release')
 
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value
@@ -752,7 +769,7 @@ async function refreshVersion(force = true) {
 }
 
 async function handleUpdate() {
-  if (updating.value) return
+  if (externalUpdates.value || updating.value) return
 
   updating.value = true
   updateError.value = ''
@@ -783,7 +800,7 @@ function resetRollbackState() {
 }
 
 async function toggleRollbackPanel() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || externalUpdates.value) return
   rollbackPanelOpen.value = !rollbackPanelOpen.value
   // Source builds only show a hint, no version list to fetch
   if (
@@ -826,7 +843,7 @@ function formatPublishedAt(publishedAt: string): string {
 }
 
 async function handleRollback() {
-  if (!isAdmin.value) return
+  if (!isAdmin.value || externalUpdates.value) return
   if (rollingBack.value || !selectedRollbackVersion.value) return
 
   rollingBack.value = true

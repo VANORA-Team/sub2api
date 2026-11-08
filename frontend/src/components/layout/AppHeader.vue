@@ -167,7 +167,7 @@
 
                 <a
                   v-if="authStore.isAdmin"
-                  href="https://github.com/Wei-Shaw/sub2api"
+                  :href="REPOSITORY_URL"
                   target="_blank"
                   rel="noopener noreferrer"
                   @click="closeDropdown"
@@ -266,6 +266,7 @@ import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 import { resolveRouteMetaKeys } from '@/router/title'
 import { resolveSiteBillingMode } from '@/utils/siteBillingMode'
 import { getCustomMenuLabel } from '@/utils/customMenu'
+import { REPOSITORY_URL } from '@/config/repository'
 
 const router = useRouter()
 const route = useRoute()

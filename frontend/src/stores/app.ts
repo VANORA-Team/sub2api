@@ -13,6 +13,7 @@ import {
   type ReleaseInfo
 } from '@/api/admin/system'
 import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
+import { REPOSITORY_URL } from '@/config/repository'
 
 export const useAppStore = defineStore('app', () => {
   // ==================== State ====================
@@ -42,6 +43,8 @@ export const useAppStore = defineStore('app', () => {
   const latestVersion = ref<string>('')
   const hasUpdate = ref<boolean>(false)
   const buildType = ref<string>('source')
+  const updateMode = ref<'inline' | 'external'>('external')
+  const repositoryUrl = ref(REPOSITORY_URL)
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
   // Auto-incrementing ID for toasts
@@ -248,6 +251,8 @@ export const useAppStore = defineStore('app', () => {
         latest_version: latestVersion.value,
         has_update: hasUpdate.value,
         build_type: buildType.value,
+        update_mode: updateMode.value,
+        repository_url: repositoryUrl.value,
         release_info: releaseInfo.value || undefined,
         cached: true
       }
@@ -265,6 +270,8 @@ export const useAppStore = defineStore('app', () => {
       latestVersion.value = data.latest_version
       hasUpdate.value = data.has_update
       buildType.value = data.build_type || 'source'
+      updateMode.value = data.update_mode || 'external'
+      repositoryUrl.value = data.repository_url || REPOSITORY_URL
       releaseInfo.value = data.release_info || null
       versionLoaded.value = true
       return data
@@ -467,6 +474,8 @@ export const useAppStore = defineStore('app', () => {
     latestVersion,
     hasUpdate,
     buildType,
+    updateMode,
+    repositoryUrl,
     releaseInfo,
 
     // Computed

@@ -2,6 +2,8 @@ FROM golang:1.27.3-alpine
 
 WORKDIR /app
 
+ENV SUB2API_UPDATE_MODE=external
+
 # 安装必要的工具
 RUN apk add --no-cache git
 

@@ -4,10 +4,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,7 +73,93 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
-	require.Equal(t, "ranxi2001/sub2api", githubClient.latestRepo)
+	require.Equal(t, "VANORA-Team/sub2api", githubClient.latestRepo)
+}
+
+func TestUpdateServiceContainerModeBypassesReleaseLookupsAndCache(t *testing.T) {
+	t.Setenv("SUB2API_UPDATE_MODE", "external")
+	// Nil dependencies ensure even a cache read or a forced release lookup fails
+	// the test. Image deployments only report their own installed version.
+	svc := NewUpdateService(nil, nil, "0.1.147", "release")
+
+	for _, force := range []bool{false, true} {
+		info, err := svc.CheckUpdate(context.Background(), force)
+		require.NoError(t, err)
+		require.Equal(t, "0.1.147", info.CurrentVersion)
+		require.Equal(t, "external", info.UpdateMode)
+		require.Equal(t, "https://github.com/VANORA-Team/sub2api", info.RepositoryURL)
+		require.False(t, info.HasUpdate)
+		require.False(t, info.Cached)
+		require.Nil(t, info.ReleaseInfo)
+	}
+
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, versions)
+	require.Empty(t, versions)
+}
+
+func TestUpdateServiceContainerModeRejectsBinaryMutations(t *testing.T) {
+	t.Setenv("SUB2API_UPDATE_MODE", "external")
+	svc := NewUpdateService(nil, nil, "0.1.147", "release")
+
+	for _, mutation := range []struct {
+		name string
+		run  func() error
+	}{
+		{"update", func() error { return svc.PerformUpdate(context.Background()) }},
+		{"local rollback", svc.Rollback},
+		{"release rollback", func() error { return svc.RollbackToVersion(context.Background(), "0.1.146") }},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			err := mutation.run()
+			require.ErrorIs(t, err, ErrSelfUpdateDisabled)
+			require.Equal(t, http.StatusForbidden, infraerrors.Code(err))
+			require.Contains(t, err.Error(), "https://github.com/VANORA-Team/sub2api")
+		})
+	}
+}
+
+func TestUpdateServiceRejectsUpstreamCacheAndCachesForkRelease(t *testing.T) {
+	t.Setenv("SUB2API_UPDATE_MODE", "")
+	for _, repository := range []string{"", "ranxi2001/sub2api", "Wei-Shaw/sub2api"} {
+		t.Run(repository, func(t *testing.T) {
+			legacy, err := json.Marshal(map[string]any{
+				"repository": repository,
+				"latest":     "99.0.0",
+				"timestamp":  time.Now().Unix(),
+				"release_info": ReleaseInfo{
+					HTMLURL: "https://github.com/ranxi2001/sub2api/releases",
+				},
+			})
+			require.NoError(t, err)
+			cache := &updateServiceCacheStub{data: string(legacy)}
+			client := &updateServiceGitHubClientStub{
+				release: &GitHubRelease{
+					TagName: "v0.1.148",
+					HTMLURL: "https://github.com/VANORA-Team/sub2api/releases/tag/v0.1.148",
+				},
+			}
+			svc := NewUpdateService(cache, client, "0.1.147", "release")
+
+			info, err := svc.CheckUpdate(context.Background(), false)
+			require.NoError(t, err)
+			require.False(t, info.Cached)
+			require.Equal(t, "0.1.148", info.LatestVersion)
+			require.Equal(t, "VANORA-Team/sub2api", client.latestRepo)
+			require.Equal(t, "inline", info.UpdateMode)
+			require.Equal(t, client.release.HTMLURL, info.ReleaseInfo.HTMLURL)
+
+			// A second request must reuse the new fork cache without a lookup.
+			client.latestRepo = ""
+			info, err = svc.CheckUpdate(context.Background(), false)
+			require.NoError(t, err)
+			require.True(t, info.Cached)
+			require.Empty(t, client.latestRepo)
+			require.Equal(t, "0.1.148", info.LatestVersion)
+			require.Equal(t, "https://github.com/VANORA-Team/sub2api", info.RepositoryURL)
+		})
+	}
 }
 
 func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateService {

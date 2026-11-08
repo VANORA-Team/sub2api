@@ -204,7 +204,7 @@ func poolUsageObservation(account *Account, usage *UsageInfo, now time.Time) *Po
 	return nonEmptyPoolObservation(observation)
 }
 
-func poolCNQuotaObservation(result *CNProviderQuotaProbeResult, now time.Time) *PoolQuotaObservation {
+func poolCNQuotaObservation(result *CNProviderQuotaProbeResult, balanceThreshold float64, now time.Time) *PoolQuotaObservation {
 	if result == nil || !result.Success || result.FetchedAt <= 0 {
 		return nil
 	}
@@ -213,6 +213,20 @@ func poolCNQuotaObservation(result *CNProviderQuotaProbeResult, now time.Time) *
 		return nil
 	}
 	observation := &PoolQuotaObservation{Source: "cn_quota", ObservedAt: at}
+	// Command Code returns windows and USD credits from the same probe.
+	// Keep balance-only plans observable without issuing a second query.
+	if result.Balance != nil {
+		balance := poolCNBalanceObservation(result.Balance, balanceThreshold, now)
+		if balance == nil {
+			observation.Partial = true
+		} else {
+			observation.Balances = balance.Balances
+			observation.BalanceLow = balance.BalanceLow
+			if balance.ObservedAt.Before(observation.ObservedAt) {
+				observation.ObservedAt = balance.ObservedAt
+			}
+		}
+	}
 	for _, item := range result.Tiers {
 		if item.Unknown || math.IsNaN(item.UsedPercent) || math.IsInf(item.UsedPercent, 0) || item.UsedPercent < 0 {
 			observation.Partial = true

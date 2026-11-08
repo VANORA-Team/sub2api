@@ -55,6 +55,8 @@ func poolAccountMonitored(account *Account) bool {
 		return account.Type == AccountTypeOAuth || account.Type == AccountTypeAPIKey
 	case PlatformOpenCodeGo:
 		return account.IsOpenCodeGoPlan()
+	case PlatformCommandCode:
+		return account.commandCodeUsageSupported()
 	case PlatformKimi, PlatformZhipu, PlatformMiniMax:
 		if account.IsCodingPlan() {
 			return account.GetCodingPlanProvider() != ""

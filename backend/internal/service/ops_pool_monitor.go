@@ -322,7 +322,7 @@ func (m *PoolQuotaMonitor) observe(ctx context.Context, account *Account) *PoolQ
 		}
 		return observation
 	}
-	if account.IsOpenCodeGoPlan() || (account.IsCNProvider() && account.IsCodingPlan()) {
+	if account.IsCommandCode() || account.IsOpenCodeGoPlan() || (account.IsCNProvider() && account.IsCodingPlan()) {
 		if m.cnQuota == nil {
 			return nil
 		}
@@ -330,7 +330,7 @@ func (m *PoolQuotaMonitor) observe(ctx context.Context, account *Account) *PoolQ
 		if err != nil {
 			return nil
 		}
-		return poolCNQuotaObservation(result, now)
+		return poolCNQuotaObservation(result, monitorBalanceThreshold(m.cfg), now)
 	}
 	if account.IsCNProvider() {
 		if m.cnBalance == nil {

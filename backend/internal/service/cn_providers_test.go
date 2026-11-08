@@ -115,7 +115,7 @@ func TestPoolCNQuotaDoesNotTreatMissingValuesAsZero(t *testing.T) {
 	require.True(t, kimi[0].Unknown)
 	require.Nil(t, poolCNQuotaObservation(&CNProviderQuotaProbeResult{
 		Success: true, FetchedAt: now.Unix(), Tiers: kimi,
-	}, now))
+	}, .5, now))
 	updates := cnQuotaExtraUpdates(PlatformKimi, kimi, now)
 	require.Nil(t, updates["kimi_5h_used_percent"])
 	zhipu := parseZhipuTokenTiers(gjson.Parse(`{"limits":[{"type":"TOKENS_LIMIT","unit":3}]}`))
@@ -124,7 +124,7 @@ func TestPoolCNQuotaDoesNotTreatMissingValuesAsZero(t *testing.T) {
 	credit := parseZhipuTokenTiers(gjson.Parse(`{"limits":[{"type":"CREDIT_LIMIT","percentage":90}]}`))
 	observation := poolCNQuotaObservation(&CNProviderQuotaProbeResult{
 		Success: true, FetchedAt: now.Unix(), Tiers: credit,
-	}, now)
+	}, .5, now)
 	require.NotNil(t, observation)
 	require.Equal(t, "credit", observation.Windows[0].Window)
 }

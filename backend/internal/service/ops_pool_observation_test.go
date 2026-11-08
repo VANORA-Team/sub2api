@@ -140,8 +140,21 @@ func TestPoolCNAndOllamaObservations(t *testing.T) {
 		{Window: "5h", UsedPercent: 91, ResetAt: now.Add(time.Hour).Format(time.RFC3339)},
 		{Window: "weekly", UsedPercent: 10, ResetAt: now.Add(-time.Second).Format(time.RFC3339)},
 	}}
-	require.Len(t, poolCNQuotaObservation(quota, now).Windows, 1)
-	require.True(t, poolCNQuotaObservation(quota, now).Partial)
+	require.Len(t, poolCNQuotaObservation(quota, .5, now).Windows, 1)
+	require.True(t, poolCNQuotaObservation(quota, .5, now).Partial)
+	quota.Balance = &CNProviderBalanceResult{Success: true, Available: true, FetchedAt: now.Unix(), Currency: "USD", Balance: 2}
+	combined := poolCNQuotaObservation(quota, 3, now)
+	require.Len(t, combined.Windows, 1)
+	require.Equal(t, 2.0, combined.Balances[0].Balance)
+	require.True(t, *combined.BalanceLow, "the configured balance threshold also applies to quota probes")
+	quota.Tiers = nil
+	require.NotNil(t, poolCNQuotaObservation(quota, .5, now), "balance-only plans remain observable")
+	quota.Balance.FetchedAt = now.Add(-poolQuotaMaxAge - time.Second).Unix()
+	require.Nil(t, poolCNQuotaObservation(quota, .5, now), "expired balances must not appear as current")
+	quota.Tiers = []CNQuotaTier{{Window: "5h", UsedPercent: 1}}
+	combined = poolCNQuotaObservation(quota, .5, now)
+	require.Empty(t, combined.Balances)
+	require.True(t, combined.Partial)
 	balance := &CNProviderBalanceResult{Success: true, Available: true, FetchedAt: now.Unix(), Balances: []CNProviderBalanceEntry{
 		{Currency: "CNY", Balance: .1}, {Currency: "USD", Balance: 2},
 	}}

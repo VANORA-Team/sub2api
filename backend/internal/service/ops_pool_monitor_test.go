@@ -6,9 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -200,4 +203,108 @@ func TestPoolCollectionFlowsIntoAvailabilityAndAlert(t *testing.T) {
 	}, nil, now, now, "", &groupID)
 	require.True(t, ok)
 	require.Equal(t, 1.0, metric)
+}
+
+func TestPoolCollectorCommandCodeQuotaAndBalance(t *testing.T) {
+	t.Run("windows and balance reach account availability", func(t *testing.T) {
+		now := time.Now().UTC()
+		account := commandCodeUsageAccount()
+		account.Schedulable = true
+		account.Groups = []*Group{{ID: 7, Name: "command code", Platform: PlatformCommandCode}}
+		upstream := newCommandCodeAlphaUpstream(`{"org":null}`)
+		upstream.responses["/alpha/billing/credits"] = commandCodeAlphaResponse{
+			status: http.StatusOK,
+			body: fmt.Sprintf(`{"credits":{"monthlyCredits":68.09,"purchasedCredits":0,"freeCredits":0},
+				"windowLimits":{"limited":true,
+				"fiveHour":{"used":1,"cap":100,"resetAt":%d},
+				"weekly":{"used":5,"cap":100,"resetAt":%d}}}`,
+				now.Add(5*time.Hour).UnixMilli(), now.Add(7*24*time.Hour).UnixMilli()),
+		}
+		upstream.responses["/alpha/billing/subscriptions"] = commandCodeAlphaResponse{
+			status: http.StatusOK,
+			body: fmt.Sprintf(`{"data":{"planId":"individual-goat","currentPeriodStart":%q,"currentPeriodEnd":%q}}`,
+				now.Add(-24*time.Hour).Format(time.RFC3339), now.Add(29*24*time.Hour).Format(time.RFC3339)),
+		}
+		upstream.responses["/alpha/usage/summary"] = commandCodeAlphaResponse{
+			status: http.StatusOK, body: `{"totalMonthlyCredits":2.11}`,
+		}
+		repo := &poolMonitorAccountStub{current: account}
+		monitor := &PoolQuotaMonitor{
+			accounts: repo, instance: "test",
+			cnQuota: NewCNProviderQuotaService(repo, nil, upstream, &config.Config{}),
+		}
+		monitor.collectOne(context.Background(), account.ID)
+		require.Equal(t, 1, repo.writes, "monitoring persists only its own snapshot")
+		require.Len(t, account.Extra, 1)
+		require.Contains(t, account.Extra, PoolQuotaSnapshotExtraKey)
+		observation := poolCurrentObservation(account, time.Now())
+		require.NotNil(t, observation)
+		require.Equal(t, "cn_quota", observation.Source)
+		require.False(t, observation.Partial)
+		require.Len(t, observation.Windows, 3)
+		require.Equal(t, []string{"5h", "weekly", "monthly"}, []string{
+			observation.Windows[0].Window, observation.Windows[1].Window, observation.Windows[2].Window,
+		})
+		require.Equal(t, 1.0, observation.Windows[0].UsedPercent)
+		require.Equal(t, 5.0, observation.Windows[1].UsedPercent)
+		require.InDelta(t, 3.01, observation.Windows[2].UsedPercent, .01)
+		require.Len(t, observation.Balances, 1)
+		require.Equal(t, "USD", observation.Balances[0].Currency)
+		require.Equal(t, 68.09, observation.Balances[0].Balance)
+		require.False(t, *observation.BalanceLow)
+		require.Len(t, upstream.requests, 4, "windows and balance share one provider probe")
+
+		ops := &OpsService{accountRepo: repo}
+		groupID := int64(7)
+		availability, err := ops.GetAccountAvailability(context.Background(), "", &groupID)
+		require.NoError(t, err)
+		require.True(t, availability.Accounts[account.ID].QuotaMonitored)
+		require.False(t, availability.Accounts[account.ID].QuotaUnsupported)
+		require.NotNil(t, availability.Accounts[account.ID].Quota)
+		require.Equal(t, int64(1), availability.Group.PoolQuota.Known)
+		require.Zero(t, availability.Group.PoolQuota.Unsupported)
+		encoded, err := json.Marshal(availability.Accounts[account.ID])
+		require.NoError(t, err)
+		require.NotContains(t, string(encoded), "user_test_key")
+	})
+
+	t.Run("probe failures remain unknown", func(t *testing.T) {
+		account := commandCodeUsageAccount()
+		upstream := newCommandCodeAlphaUpstream(`{}`)
+		upstream.responses["/alpha/whoami"] = commandCodeAlphaResponse{
+			status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`,
+		}
+		repo := &poolMonitorAccountStub{current: account}
+		monitor := &PoolQuotaMonitor{
+			accounts: repo, instance: "test",
+			cnQuota: NewCNProviderQuotaService(repo, nil, upstream, &config.Config{}),
+		}
+		require.True(t, poolAccountMonitored(account))
+		monitor.collectOne(context.Background(), account.ID)
+		require.Equal(t, 1, repo.writes)
+		require.Nil(t, poolCurrentObservation(account, time.Now()))
+		require.False(t, poolMonitorDue(account, time.Now()))
+	})
+
+	for _, test := range []struct{ name, accountType, baseURL string }{
+		{"custom upstream", AccountTypeAPIKey, "https://relay.example/v1"},
+		{"insecure upstream", AccountTypeAPIKey, "http://api.commandcode.ai"},
+		{"unsupported credential type", AccountTypeOAuth, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account := commandCodeUsageAccount()
+			account.Type = test.accountType
+			account.Credentials["base_url"] = test.baseURL
+			upstream := newCommandCodeAlphaUpstream(`{}`)
+			repo := &poolMonitorAccountStub{current: account}
+			monitor := &PoolQuotaMonitor{
+				accounts: repo, instance: "test",
+				cnQuota: NewCNProviderQuotaService(repo, nil, upstream, &config.Config{}),
+			}
+			require.False(t, poolAccountMonitored(account))
+			monitor.collectOne(context.Background(), account.ID)
+			require.Empty(t, upstream.requests)
+			require.Zero(t, repo.writes)
+		})
+	}
 }

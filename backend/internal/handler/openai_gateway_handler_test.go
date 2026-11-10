@@ -1159,9 +1159,11 @@ func TestOpenAIResponsesWebSocket_DisconnectBeforeFirstMessageIsInfo(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, clientConn.CloseNow())
 
+	// An abrupt close can finish the socket read or cancel the HTTP request
+	// first. Both paths are expected disconnects and must stay at info level.
 	require.Eventually(t, func() bool {
 		reason, ok := logSink.FieldValueForMessage("openai.websocket_read_first_message_failed", "reason")
-		return ok && reason == "peer_disconnected" &&
+		return ok && (reason == "peer_disconnected" || reason == "request_canceled") &&
 			logSink.ContainsMessageAtLevel("openai.websocket_read_first_message_failed", "info") &&
 			!logSink.ContainsMessageAtLevel("openai.websocket_read_first_message_failed", "warn")
 	}, time.Second, 10*time.Millisecond)

@@ -87,7 +87,8 @@ func TestPriorityAnalysisConcurrentScopesHaveBoundedSQLReaders(t *testing.T) {
 	cancel()
 	for i := 0; i < 2; i++ {
 		select {
-		case <-done:
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
 		case <-time.After(5 * time.Second):
 			t.Fatal("cancelled reader leaked")
 		}

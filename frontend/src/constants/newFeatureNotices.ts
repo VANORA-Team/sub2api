@@ -4,6 +4,8 @@
  * browser; use a new ID to announce the feature again in a later release.
  */
 export const NEW_FEATURE_NOTICES = {
+  oauthDegradationActions: 'oauth-degradation-actions-initial-announcement',
+  dashboardAccountConcurrency: 'dashboard-account-concurrency-initial-announcement',
   qualityRetestRest: 'quality-retest-rest-initial-announcement',
   keyRisk: 'key-risk-notices-acknowledgement-initial-announcement',
   mistralBudgetUsage: 'mistral-budget-usage-initial-announcement',
@@ -25,6 +27,7 @@ export const NEW_FEATURE_NOTICES = {
   vipAutoCredit: 'vip-auto-credit-initial-announcement',
   oauthInitialTOTPRotation429: 'oauth-initial-totp-rotation-on-429-initial-announcement',
   oauthInitialDisableScheduling429: 'oauth-initial-disable-scheduling-on-429-initial-announcement',
+  oauthInitialWSSettings: 'oauth-initial-ws-settings-initial-announcement',
   aiOpsCodex: 'ai-ops-codex-observe-initial-announcement',
   aiOpsProposalCancel: 'ai-ops-proposal-cancel-initial-announcement',
   bepusdtPayment: 'bepusdt-embedded-payment-initial-announcement',
@@ -33,4 +36,5 @@ export const NEW_FEATURE_NOTICES = {
   streamFirstEventTiming: 'stream-first-event-timing-initial-announcement',
   openaiImageHeaderTimeoutGroups: 'openai-image-header-timeout-groups-initial-announcement',
   oauthInitialModelSelection: 'oauth-initial-model-selection-initial-announcement',
+  usageRateCard: 'usage-rpm-tpm-card-initial-announcement',
 } as const

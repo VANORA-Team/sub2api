@@ -1,0 +1,36 @@
+name: Upstream sync automation checks
+
+on:
+  push:
+    paths:
+      - .github/scripts/sync-upstream.sh
+      - .github/scripts/check-fork-image.sh
+      - .github/scripts/test_upstream_sync.py
+      - .github/workflows/upstream-image.yml
+      - .github/workflows/build-fork-image.yml
+      - .github/workflows/upstream-sync-check.yml
+  pull_request:
+    paths:
+      - .github/scripts/sync-upstream.sh
+      - .github/scripts/check-fork-image.sh
+      - .github/scripts/test_upstream_sync.py
+      - .github/workflows/upstream-image.yml
+      - .github/workflows/build-fork-image.yml
+      - .github/workflows/upstream-sync-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-automation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check shell syntax
+        run: bash -n .github/scripts/sync-upstream.sh .github/scripts/check-fork-image.sh
+      - name: Check merges and image recovery
+        run: python3 .github/scripts/test_upstream_sync.py

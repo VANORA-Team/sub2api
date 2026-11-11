@@ -41,30 +41,12 @@ jobs:
           FORCE: ${{ inputs.force }}
           HAS_UPSTREAM_SYNC_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN != '' }}
         run: |
-          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git fetch --no-tags https://github.com/ranxi2001/sub2api.git production
-          upstream=$(git rev-parse FETCH_HEAD)
-          before=$(git rev-parse HEAD)
-          build=false
-          if ! git merge-base --is-ancestor "$upstream" HEAD; then
-            if ! git merge --no-edit "$upstream"; then
-              echo "::error::Upstream conflicts with main. Resolve the merge while retaining the fork changes; main has not been pushed."
-              exit 1
-            fi
-            build=true
-          elif [[ "$FORCE" == "true" ]]; then
-            build=true
-          fi
-          if [[ "$HAS_UPSTREAM_SYNC_TOKEN" != "true" ]] && ! git diff --quiet "$before" HEAD -- .github/workflows; then
-            echo "::error::Upstream changes workflow files. Configure the UPSTREAM_SYNC_TOKEN Actions secret with Contents and Workflows write permissions for this repository; GITHUB_TOKEN cannot push these changes. Main has not been pushed."
-            exit 1
-          fi
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "Upstream production: $upstream" >> "$GITHUB_STEP_SUMMARY"
-          echo "Main source: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          bash .github/scripts/sync-upstream.sh
+
+      - name: Check upstream sync automation
+        run: python3 .github/scripts/test_upstream_sync.py
 
       - name: Set up Go
         if: steps.merge.outputs.build == 'true'
@@ -78,8 +60,8 @@ jobs:
         working-directory: backend
         run: |
           go build ./cmd/server
-          go test -tags=unit ./internal/service ./internal/repository ./internal/handler/admin ./migrations \
-            -run 'Test(Pool|.*Pool|OpenAIQuota|CNProvider|.*Cline|.*CommandCode|.*Zhipu|.*HTTP2|.*HTTPUpstream|.*UpstreamBilling|.*AccountExtra)' -count=1
+          go test -tags=unit ./internal/service ./internal/repository ./internal/handler ./internal/handler/admin ./migrations \
+            -run 'Test(Pool|.*Pool|OpenAIQuota|CNProvider|.*Cline|.*CommandCode|.*Zhipu|.*HTTP2|.*HTTPUpstream|.*UpstreamBilling|.*AccountExtra|OpenAIResponsesWebSocket_.*BeforeFirstMessageIsInfo|PriorityAnalysisConcurrentScopesHaveBoundedSQLReaders|LockAndMergeAccountProbeExtra)' -count=1
 
       - name: Set up pnpm
         if: steps.merge.outputs.build == 'true'
@@ -109,12 +91,21 @@ jobs:
         if: steps.merge.outputs.build == 'true'
         run: git push origin HEAD:refs/heads/main
 
+      - name: Save upstream sync diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sync-diagnostics
+          path: ${{ runner.temp }}/upstream-sync/
+          if-no-files-found: ignore
+          retention-days: 14
+
   image:
     needs: sync
-    if: needs.sync.outputs.build == 'true'
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/build-fork-image.yml
     with:
       ref: ${{ needs.sync.outputs.commit }}
+      force: ${{ inputs.force == true }}

@@ -2,12 +2,21 @@ name: Build fork image
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even if this commit already has a complete image
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       ref:
         description: Source commit to build from main
         type: string
         required: true
+      force:
+        description: Rebuild even if this commit already has a complete image
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,9 +41,6 @@ jobs:
           echo "image=ghcr.io/${REPOSITORY_OWNER,,}/sub2api" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -45,7 +51,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check published image
+        id: published
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}:sha-${{ steps.metadata.outputs.commit }}
+          FORCE: ${{ inputs.force }}
+        run: bash .github/scripts/check-fork-image.sh
+
+      - name: Set up QEMU
+        if: steps.published.outputs.build == 'true'
+        uses: docker/setup-qemu-action@v3
+
       - name: Build and push image
+        if: steps.published.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .

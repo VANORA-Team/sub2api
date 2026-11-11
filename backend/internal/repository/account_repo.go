@@ -618,6 +618,8 @@ func (r *accountRepository) updateAccount(
 
 	account.UpdatedAt = updated.UpdatedAt
 	account.Schedulable = updated.Schedulable
+	account.Status = updated.Status
+	account.ErrorMessage = derefString(updated.ErrorMessage)
 	// 普通账号编辑（如 model_mapping / credentials）也需要立即刷新单账号快照，
 	// 否则网关在 outbox worker 延迟或异常时仍可能读到旧配置。
 	if contextTx == nil {
@@ -639,14 +641,18 @@ func (r *accountRepository) updateLockedAccount(
 		return nil, err
 	}
 	account.Extra = extra
-	account.Concurrency = account.LimitOAuthDegradationConcurrency(account.Concurrency)
 	// lockAndMergeAccountProbeExtra holds the account row lock in this transaction.
 	if err := accounttimer.CancelPending(ctx, client, account.ID, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 
 	schedulable := account.Schedulable
-	if account.Status == service.StatusError {
+	// OAuth authentication failures are blocked by status, not by the persistent
+	// scheduling switch. An ordinary edit of an errored account must preserve the
+	// current switch rather than overwrite it with the caller's stale snapshot.
+	preserveOAuthErrorScheduling := account.Status == service.StatusError &&
+		account.Platform == service.PlatformOpenAI && account.Type == service.AccountTypeOAuth
+	if account.Status == service.StatusError && !preserveOAuthErrorScheduling {
 		schedulable = false
 	}
 
@@ -659,10 +665,14 @@ func (r *accountRepository) updateLockedAccount(
 		SetExtra(extra).
 		SetConcurrency(account.Concurrency).
 		SetPriority(account.Priority).
-		SetStatus(account.Status).
-		SetErrorMessage(account.ErrorMessage).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
-	if !accounttimer.PreserveSchedulable(ctx) || account.Status == service.StatusError {
+	// A settings form may have read active before a concurrent 401 committed.
+	// OpenAI OAuth SetError now preserves the scheduling switch, so retaining
+	// the current status/error is the persistent authentication fence.
+	if !service.PreserveAccountStatus(ctx) || account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth {
+		builder.SetStatus(account.Status).SetErrorMessage(account.ErrorMessage)
+	}
+	if !preserveOAuthErrorScheduling && (!accounttimer.PreserveSchedulable(ctx) || account.Status == service.StatusError) {
 		builder.SetSchedulable(schedulable)
 	}
 
@@ -859,8 +869,6 @@ func lockAndMergeAccountProbeExtra(
 			currentExtra = nil
 		}
 	}
-	live := service.Account{Concurrency: currentConcurrency, Extra: currentExtra}
-	account.Concurrency = live.LimitOAuthDegradationConcurrency(account.Concurrency)
 	validNewAPIBinding := false
 	if currentExtra[service.UpstreamBillingProviderExtraKey] == "new_api" {
 		var fingerprint string
@@ -932,6 +940,14 @@ func lockAndMergeAccountProbeExtra(
 	}
 	delete(extra, service.AutoConfigConcurrencyExtraKey)
 	if state, ok := currentExtra[service.AutoConfigConcurrencyExtraKey]; ok {
+		if extra == nil {
+			extra = make(map[string]any)
+		}
+		if account.Concurrency != currentConcurrency {
+			// Native manual edits take over from degradation. Old successful
+			// requests cannot carry their progress into the new setting.
+			state = service.AutoConfigConcurrencyState{Concurrency: account.Concurrency}
+		}
 		extra[service.AutoConfigConcurrencyExtraKey] = state
 	}
 	for _, key := range []string{
@@ -1200,8 +1216,8 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 // Re-authentication may take several minutes; the expected-value guard keeps a
 // concurrent manual edit or token refresh from being overwritten by a stale
 // callback. Successful swaps also restore the account's active state and clear
-// transient scheduling quarantine. Admission and 429 scheduling policies retain
-// the existing scheduling switch.
+// transient scheduling quarantine. The persistent scheduling switch is left
+// unchanged: authentication failures do not own manual, 429 or admission pauses.
 func (r *accountRepository) ApplyOpenAIOAuthReauth(
 	ctx context.Context,
 	taskID int64,
@@ -1249,7 +1265,6 @@ func (r *accountRepository) ApplyOpenAIOAuthReauth(
 			expires_at = COALESCE($14::timestamptz, a.expires_at),
 			status = $5,
 			error_message = '',
-			schedulable = CASE WHEN a.extra ? 'openai_two_fa_admission' OR a.extra @> '{"openai_disable_scheduling_on_429":true}'::jsonb THEN a.schedulable ELSE TRUE END,
 			rate_limited_at = NULL,
 			rate_limit_reset_at = NULL,
 			overload_until = NULL,
@@ -1828,12 +1843,21 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 }
 
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
-	_, err := r.client.Account.Update().
-		Where(dbaccount.IDEQ(id)).
-		SetStatus(service.StatusError).
-		SetErrorMessage(errorMsg).
-		SetSchedulable(false).
-		Save(ctx)
+	if scoped := r.accountTransactionScope(ctx); scoped != r {
+		return scoped.SetError(ctx, id, errorMsg)
+	}
+	// Error status already excludes OpenAI OAuth accounts from scheduling. Keep
+	// their persistent switch so successful re-authentication can restore a
+	// previously enabled account without reopening a manual or 429 pause. Read
+	// the switch in the UPDATE itself to preserve concurrent scheduling changes.
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET status = $2,
+			error_message = $3,
+			schedulable = CASE WHEN platform = $4 AND type = $5 THEN schedulable ELSE FALSE END,
+			updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id, service.StatusError, errorMsg, service.PlatformOpenAI, service.AccountTypeOAuth)
 	if err != nil {
 		return err
 	}
@@ -3571,7 +3595,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 	if updates.Concurrency != nil {
-		setClauses = append(setClauses, "concurrency = "+oauthDegradationConcurrencySQL("$"+itoa(idx)))
+		setClauses = append(setClauses, "concurrency = $"+itoa(idx))
 		args = append(args, *updates.Concurrency)
 		idx++
 	}
@@ -3670,7 +3694,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 				" AND COALESCE(btrim("+credentialPlaceholder+"::jsonb ->> 'account_mode') <> 'zen', true) IS NOT TRUE")
 	}
 
-	if len(updates.Extra) > 0 || len(updates.ExcelBPSAuthorizationPending) > 0 || len(ollamaGroupIdentityChanges) > 0 || len(opencodeGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
+	if updates.Concurrency != nil || len(updates.Extra) > 0 || len(updates.ExcelBPSAuthorizationPending) > 0 || len(ollamaGroupIdentityChanges) > 0 || len(opencodeGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
 		extraExpression := "COALESCE(extra, '{}'::jsonb)"
 		if len(updates.Extra) > 0 {
 			payload, err := json.Marshal(updates.Extra)
@@ -3791,6 +3815,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			extraExpression = "CASE WHEN id=ANY($" + itoa(idx) + "::bigint[]) THEN (" + extraExpression + ") || '{\"openai_excel_bps_authorization_pending\":true}'::jsonb ELSE (" + extraExpression + ") - 'openai_excel_bps_authorization_pending' END"
 			args = append(args, pq.Array(pendingIDs))
 			idx++
+		}
+		if updates.Concurrency != nil {
+			// An explicit native concurrency save releases only this upgrade
+			// hold. The degradation history remains immutable audit data.
+			extraExpression = "(" + extraExpression + ") - 'auto_config_concurrency'"
 		}
 		setClauses = append(setClauses, "extra = "+extraExpression)
 	}

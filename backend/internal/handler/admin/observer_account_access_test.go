@@ -45,6 +45,8 @@ func TestObserverGuardRejectsWholeUnauthorizedBatch(t *testing.T) {
 		{"single", "GET", "/accounts/:id", "/accounts/1", "", []int64{10}, 204},
 		{"shared", "DELETE", "/accounts/:id", "/accounts/3", "", []int64{10}, 204},
 		{"hidden", "GET", "/accounts/:id", "/accounts/2", "", []int64{10}, 403},
+		{"template_allowed", "POST", "/accounts/:id/create-from-template", "/accounts/1/create-from-template", `{"name":"new","api_key":"new-secret"}`, []int64{10}, 204},
+		{"template_hidden", "POST", "/accounts/:id/create-from-template", "/accounts/2/create-from-template", `{"name":"new","api_key":"new-secret"}`, []int64{10}, 403},
 		{"ungrouped", "DELETE", "/accounts/:id", "/accounts/4", "", []int64{10}, 403},
 		{"no_grants", "GET", "/accounts/:id", "/accounts/1", "", nil, 403},
 		{"mixed_delete", "POST", "/accounts/batch-delete", "/accounts/batch-delete", `{"account_ids":[1,2]}`, []int64{10}, 403},

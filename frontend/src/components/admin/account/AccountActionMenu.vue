@@ -31,6 +31,10 @@
               <Icon name="copy" size="sm" class="text-sky-500" />
               {{ t('admin.accounts.duplicateAccount') }}
             </button>
+            <button v-if="supportsAccountKeyTemplate(account)" data-testid="account-batch-create" @click="$emit('batch-create', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-dark-700">
+              <Icon name="plus" size="sm" class="text-sky-500" />
+              {{ t('admin.accounts.batchFromTemplate.title') }}
+            </button>
             <!-- 影子账号不持凭据:重授权/刷新 token 对其无效(后端拒绝),故隐藏(外审 G4)。 -->
             <template v-if="(account.type === 'oauth' || account.type === 'setup-token') && !isShadow">
               <button @click="$emit('reauth', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-blue-600 hover:bg-gray-100 dark:hover:bg-dark-700">
@@ -73,9 +77,10 @@ import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
 import { supportsAccountQuota } from '@/utils/accountQuota'
+import { supportsAccountKeyTemplate } from '@/components/account/accountTemplate'
 
 const props = defineProps<{ show: boolean; account: Account | null; anchorRect: DOMRect | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'iq-test', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'iq-test', 'duplicate', 'batch-create', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
 const { t } = useI18n()
 const menuRef = ref<HTMLElement | null>(null)
 const { width: viewportWidth, height: viewportHeight } = useWindowSize()

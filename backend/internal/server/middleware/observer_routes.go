@@ -27,6 +27,7 @@ var observerAccountRoutes = map[string]struct{}{
 	"GET /api/v1/admin/accounts/:id":                                 {},
 	"POST /api/v1/admin/accounts":                                    {},
 	"POST /api/v1/admin/accounts/:id/duplicate":                      {},
+	"POST /api/v1/admin/accounts/:id/create-from-template":           {},
 	"POST /api/v1/admin/accounts/check-mixed-channel":                {},
 	"POST /api/v1/admin/accounts/import/codex-session":               {},
 	"PUT /api/v1/admin/accounts/:id":                                 {},

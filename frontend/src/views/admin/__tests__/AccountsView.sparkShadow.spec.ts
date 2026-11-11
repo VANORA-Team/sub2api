@@ -6,6 +6,7 @@ import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
+import BatchCreateAccountModal from '@/components/account/BatchCreateAccountModal.vue'
 
 // 外审 F2:AccountActionMenu emit 'create-spark-shadow',但 AccountsView 此前未监听,
 // 导致按钮点击无效。本测试通过真实组件引用 emit 该事件,断言父页面接线调用 API。
@@ -92,6 +93,7 @@ const mountView = () =>
         ErrorPassthroughRulesModal: true,
         TLSFingerprintProfilesModal: true,
         CreateAccountModal: true,
+        BatchCreateAccountModal: true,
         EditAccountModal: true,
         BulkEditAccountModal: true,
         PlatformTypeBadge: true,
@@ -135,6 +137,25 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     expect(duplicateAccount).toHaveBeenCalledWith(42)
     expect(showSuccess).toHaveBeenCalledWith('admin.accounts.duplicateSuccess')
     expect(listAccounts.mock.calls.length).toBeGreaterThan(1)
+    wrapper.unmount()
+  })
+
+  it('opens batch creation with the chosen template and reloads after creation', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const source = { id: 42, name: 'template', type: 'apikey' }
+    wrapper.findComponent(AccountActionMenu).vm.$emit('batch-create', source)
+    await flushPromises()
+    const modal = wrapper.findComponent(BatchCreateAccountModal)
+    expect(modal.props('show')).toBe(true)
+    expect(modal.props('account')).toEqual(source)
+    const loads = listAccounts.mock.calls.length
+    modal.vm.$emit('created')
+    await flushPromises()
+    expect(listAccounts.mock.calls.length).toBeGreaterThan(loads)
+    modal.vm.$emit('close')
+    await flushPromises()
+    expect(modal.props('show')).toBe(false)
     wrapper.unmount()
   })
 

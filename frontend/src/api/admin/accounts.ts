@@ -248,6 +248,24 @@ export async function duplicate(id: number): Promise<Account> {
   return data
 }
 
+export interface CreateAccountFromTemplateRequest {
+  name: string
+  api_key: string
+  schedulable: boolean
+}
+
+/** The caller retains one operation key per batch item across retries. */
+export async function createFromTemplate(
+  id: number,
+  input: CreateAccountFromTemplateRequest,
+  operationKey: string
+): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/create-from-template`, input, {
+    headers: { 'Idempotency-Key': operationKey }
+  })
+  return data
+}
+
 /**
  * Update account
  * @param id - Account ID
@@ -1490,6 +1508,7 @@ export const accountsAPI = {
   getById,
   create,
   duplicate,
+  createFromTemplate,
   update,
   getGrokMediaEligibility,
   updateGrokMediaEligibility,

@@ -49,6 +49,28 @@ const getBodyText = () => document.body.textContent ?? ''
 const getBodyButtons = () => Array.from(document.body.querySelectorAll('button'))
 
 describe('AccountActionMenu — spark shadow 按钮可见性', () => {
+  it('API key accounts can open batch creation with their settings', async () => {
+    const account = makeAccount({ type: 'apikey' })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, anchorRect },
+      attachTo: document.body
+    })
+    document.body.querySelector<HTMLButtonElement>('[data-testid="account-batch-create"]')!.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('batch-create')?.[0]).toEqual([account])
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('OAuth accounts cannot batch create by replacing API keys', () => {
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account: makeAccount({ type: 'oauth' }), anchorRect },
+      attachTo: document.body
+    })
+    expect(document.body.querySelector('[data-testid="account-batch-create"]')).toBeNull()
+    wrapper.unmount()
+  })
+
   it('普通账号显示「复制账号」按钮', () => {
     const account = makeAccount({ platform: 'anthropic', type: 'apikey', parent_account_id: null })
     const wrapper = mount(AccountActionMenu, {

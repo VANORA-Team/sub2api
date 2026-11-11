@@ -185,7 +185,10 @@ func duplicateAccountGroups(source *Account) ([]AccountGroup, []int64) {
 		groups := make([]AccountGroup, 0, len(source.AccountGroups))
 		groupIDs := make([]int64, 0, len(source.AccountGroups))
 		for _, sourceGroup := range source.AccountGroups {
-			groups = append(groups, AccountGroup{GroupID: sourceGroup.GroupID, Priority: sourceGroup.Priority})
+			groups = append(groups, AccountGroup{
+				GroupID: sourceGroup.GroupID, Priority: sourceGroup.Priority,
+				AllowedModels: slices.Clone(sourceGroup.AllowedModels),
+			})
 			groupIDs = append(groupIDs, sourceGroup.GroupID)
 		}
 		return groups, groupIDs
@@ -248,6 +251,10 @@ func cloneAccountValuePointer[T any](value *T) *T {
 // account cannot mutate the in-memory source. Linked credential shadows are excluded because they
 // intentionally do not own credentials and must be created through CreateShadow.
 func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error) {
+	return s.duplicateAccount(ctx, id, actorScope, operationKey, nil)
+}
+
+func (s *adminServiceImpl) duplicateAccount(ctx context.Context, id int64, actorScope, operationKey string, template *CreateAccountFromTemplateInput) (*Account, error) {
 	operationID := duplicateAccountOperationID(id, actorScope, operationKey)
 	existing, err := s.RecoverDuplicateAccount(ctx, id, actorScope, operationKey)
 	if err != nil {
@@ -273,10 +280,24 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 			"accounts with rotating or unsupported credential types cannot be duplicated",
 		)
 	}
+	if template != nil {
+		if !supportsAccountKeyTemplate(source) {
+			return nil, infraerrors.BadRequest("ACCOUNT_TEMPLATE_TYPE_UNSUPPORTED", "this account does not use API key authentication")
+		}
+		if template.APIKey == strings.TrimSpace(source.GetCredential("api_key")) {
+			return nil, infraerrors.BadRequest("ACCOUNT_TEMPLATE_KEY_UNCHANGED", "the new API key must differ from the template account")
+		}
+	}
 
 	credentials, err := cloneAccountJSONMap(source.Credentials)
 	if err != nil {
 		return nil, fmt.Errorf("clone account credentials: %w", err)
+	}
+	if template != nil {
+		if credentials == nil {
+			credentials = make(map[string]any)
+		}
+		credentials["api_key"] = template.APIKey
 	}
 	extra, err := duplicateAccountExtra(source.Extra)
 	if err != nil {
@@ -333,6 +354,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 		SkipDefaultGroupBind:  true,
 		SkipMixedChannelCheck: true,
 	}
+	if template != nil {
+		input.Name = template.Name
+	}
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
@@ -352,6 +376,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	}
 	// A copied credential must be reviewed before it can share live traffic with its source.
 	duplicate.Schedulable = false
+	if template != nil {
+		duplicate.Schedulable = template.Schedulable
+	}
 	if s.accountDuplicateRepo == nil {
 		return nil, errors.New("account duplicate repository is not configured")
 	}

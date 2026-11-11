@@ -93,6 +93,8 @@ type AdminService interface {
 	// RecoverDuplicateAccount returns a previously committed duplicate for an ambiguous retry.
 	// It never creates an account.
 	RecoverDuplicateAccount(ctx context.Context, id int64, actorScope, operationKey string) (*Account, error)
+	CreateAccountFromTemplate(ctx context.Context, id int64, input *CreateAccountFromTemplateInput, actorScope, operationKey string) (*Account, error)
+	RecoverAccountFromTemplate(ctx context.Context, id int64, input *CreateAccountFromTemplateInput, actorScope, operationKey string) (*Account, error)
 	UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error)
 	// UpdateAccountExtra 仅对 Extra 做 JSONB 增量合并（key 级覆盖），不会影响其它字段或运行态键。
 	// 用于刷新流程持久化 account_uuid / org_uuid 等少量键，避免被全量快照覆盖。

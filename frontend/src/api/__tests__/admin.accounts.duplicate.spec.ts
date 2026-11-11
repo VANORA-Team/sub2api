@@ -8,7 +8,7 @@ vi.mock('@/api/client', () => ({
   apiClient: { post }
 }))
 
-import { duplicate } from '@/api/admin/accounts'
+import { createFromTemplate, duplicate } from '@/api/admin/accounts'
 
 describe('admin account duplicate API', () => {
   beforeEach(() => {
@@ -27,6 +27,15 @@ describe('admin account duplicate API', () => {
       }
     })
     expect(account).toEqual({ id: 43, name: 'primary (Copy)' })
+  })
+
+  it('sends a replacement key and the per-item retry identity to the template endpoint', async () => {
+    const input = { name: 'new account', api_key: 'new-key', schedulable: true }
+    await createFromTemplate(42, input, 'batch-item-operation')
+    expect(post).toHaveBeenCalledWith('/admin/accounts/42/create-from-template', input, {
+      headers: { 'Idempotency-Key': 'batch-item-operation' }
+    })
+    expect(sessionStorage.length).toBe(0)
   })
 
   it('reuses the operation key after an ambiguous failed request', async () => {

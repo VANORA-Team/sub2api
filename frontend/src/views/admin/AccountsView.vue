@@ -515,13 +515,14 @@
     </TablePageLayout>
     <NewAPIUpstreamConfigDialog v-if="authStore.isAdmin" :show="newAPIConfigAccount !== null" :account="newAPIConfigAccount" @close="newAPIConfigAccount = null" @saved="reload" />
     <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
+    <BatchCreateAccountModal :show="batchTemplateAccount !== null" :account="batchTemplateAccount" @close="batchTemplateAccount = null" @created="reload" />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" @tested="reload" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <IQTestModal :show="showIQTest" :account="iqTestingAcc" :accounts="accounts" @close="closeIQTestModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @iq-test="handleIQTest" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @iq-test="handleIQTest" @duplicate="handleDuplicateAccount" @batch-create="batchTemplateAccount = $event" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal v-if="authStore.isAdmin" :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -599,6 +600,7 @@ import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import ExcelBPS403Badge from '@/components/account/ExcelBPS403Badge.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
 import NewAPIUpstreamConfigDialog from '@/components/account/NewAPIUpstreamConfigDialog.vue'
+import BatchCreateAccountModal from '@/components/account/BatchCreateAccountModal.vue'
 import AccountPriorityCell from '@/components/account/AccountPriorityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -687,6 +689,7 @@ const handleConfigureNewAPIUpstream = (account: Account) => {
   if (authStore.isAdmin && account.type === 'apikey') newAPIConfigAccount.value = account
 }
 const showCreate = ref(false)
+const batchTemplateAccount = ref<Account | null>(null)
 const showEdit = ref(false)
 const showSync = ref(false)
 const showImportData = ref(false)
@@ -1611,6 +1614,7 @@ const isAnyModalOpen = computed(() => {
   return (
     newAPIConfigAccount.value !== null ||
     showCreate.value ||
+    batchTemplateAccount.value !== null ||
     showEdit.value ||
     showSync.value ||
     showImportData.value ||

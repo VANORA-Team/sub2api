@@ -75,5 +75,6 @@ func TestObserverRoutesDenyNewAndGlobalEndpoints(t *testing.T) {
 	}
 	require.True(t, ObserverAccountRouteAllowed("GET", "/api/v1/admin/accounts/data"))
 	require.True(t, ObserverAccountRouteAllowed("POST", "/api/v1/admin/accounts/:id/test"))
+	require.True(t, ObserverAccountRouteAllowed("POST", "/api/v1/admin/accounts/:id/create-from-template"))
 	require.True(t, ObserverAccountRouteAllowed("POST", "/api/v1/admin/accounts/bulk-update"))
 }

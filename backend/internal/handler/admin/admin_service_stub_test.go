@@ -544,6 +544,14 @@ func (s *stubAdminService) RecoverDuplicateAccount(ctx context.Context, id int64
 	return nil, nil
 }
 
+func (s *stubAdminService) CreateAccountFromTemplate(ctx context.Context, id int64, input *service.CreateAccountFromTemplateInput, actorScope, operationKey string) (*service.Account, error) {
+	return &service.Account{ID: 301, Name: input.Name, Status: service.StatusActive, Schedulable: input.Schedulable}, nil
+}
+
+func (s *stubAdminService) RecoverAccountFromTemplate(ctx context.Context, id int64, input *service.CreateAccountFromTemplateInput, actorScope, operationKey string) (*service.Account, error) {
+	return nil, nil
+}
+
 func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {
 	s.updateAccountCalls++
 	s.lastUpdateAccountInput = input

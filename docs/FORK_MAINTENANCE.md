@@ -5,9 +5,11 @@
 fixes, CI compatibility changes, account pool quota monitoring, and image
 automation retained.
 
-`Sync upstream and build image` runs daily at 02:00 UTC (10:00 Asia/Taipei).
-It fetches upstream `production`, merges into `main`, checks the backend and
-frontend, pushes the successful merge to `main`, and builds the resulting commit.
+As of November 12, 2026, upstream updates are manual. `Sync upstream and build
+image` has no scheduled trigger. To update, select this workflow in GitHub
+Actions and choose **Run workflow** on `main`. It fetches upstream `production`,
+merges into `main`, checks the backend and frontend, pushes the successful merge
+to `main`, and builds the resulting commit.
 It does not create branches. Fetches retry transient network failures. Merge
 conflicts or failed checks stop the update before the push; resolve them while
 retaining the fork changes. A failed merge lists the affected files in the run
@@ -38,7 +40,7 @@ recovery procedure with local Git histories and an isolated registry stub.
 `Upstream sync automation checks` also runs these checks when the sync tooling
 changes in a push or pull request.
 
-For unattended updates that change `.github/workflows`, configure the repository
+For manual sync runs that change `.github/workflows`, configure the repository
 Actions secret `UPSTREAM_SYNC_TOKEN` with a fine-grained personal access token
 limited to this repository, granting **Contents: Read and write** and
 **Workflows: Read and write**. The checkout action uses this token for Git

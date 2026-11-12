@@ -1,8 +1,7 @@
 name: Sync upstream and build image
 
 on:
-  schedule:
-    - cron: '0 2 * * *'
+  # Upstream updates are started manually from Actions.
   workflow_dispatch:
     inputs:
       force:

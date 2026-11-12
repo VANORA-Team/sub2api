@@ -242,7 +242,7 @@ const mountViewWithRow = () =>
         // 使用能透传 row 数据的自定义 DataTable stub，以便渲染 cell 插槽
         DataTable: {
           props: ['data', 'columns', 'loading'],
-          template: `<div data-test="account-rows">
+          template: `<div>
             <div v-for="(row, idx) in (data || [])" :key="idx">
               <slot name="cell-name" :row="row" :value="row.name" />
               <slot name="cell-platform_type" :row="row" />
@@ -345,7 +345,7 @@ describe('admin AccountsView — 账号行展示', () => {
     const wrapper = mountViewWithRow()
     await flushPromises()
 
-    const links = wrapper.find('[data-test="account-rows"]').findAll('a')
+    const links = wrapper.findAll('a[target="_blank"]')
     expect(links).toHaveLength(1)
     const [link] = links
     expect(link.text()).toBe('relay-account')

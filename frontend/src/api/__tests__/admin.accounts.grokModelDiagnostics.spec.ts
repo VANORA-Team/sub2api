@@ -63,6 +63,15 @@ describe('admin account grok model diagnostics API', () => {
     await expect(syncUpstreamModels(25)).resolves.toEqual(result)
     expect(post).toHaveBeenCalledTimes(1)
     expect(post).toHaveBeenCalledWith('/admin/accounts/25/models/sync-upstream', undefined, undefined)
+    expect(post.mock.calls[0]).toHaveLength(3)
+  })
+
+  it('passes update options and cancellation to upstream model discovery', async () => {
+    const options = { apply: false }
+    const request = { signal: new AbortController().signal }
+    post.mockResolvedValueOnce({ data: { models: ['grok-fixture'] } })
+    await syncUpstreamModels(25, options, request)
+    expect(post).toHaveBeenCalledWith('/admin/accounts/25/models/sync-upstream', options, request)
   })
 
   it('leaves omitted diagnostics and discovery source absent for older responses', async () => {

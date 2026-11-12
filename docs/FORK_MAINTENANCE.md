@@ -22,6 +22,17 @@ follow upstream. The sync checks include both these paths and priority-analysis
 cancellation. Source conflicts still require integration work; the job never
 discards either side automatically.
 
+The November 12, 2026 failure was another source merge conflict, this time in
+the Grok model diagnostics API, settings search, and account-row tests. These
+tests now follow upstream's request-options assertions, single traversal of
+the smart-operations settings component, and external-link selector. The fork's
+batch-create account regression remains covered. The sync frontend checks
+include all three files so their combined behavior is checked before pushing.
+The settings search registry also keeps just one OpenAI response-header timeout
+entry; Git merged both sides' identical entries without reporting a conflict.
+The fork's Antigravity monitoring call passes `force=false` to upstream's new
+usage-fetch signature so routine monitoring continues to honor its cache.
+
 Run `python3 .github/scripts/test_upstream_sync.py` to check the merge and image
 recovery procedure with local Git histories and an isolated registry stub.
 `Upstream sync automation checks` also runs these checks when the sync tooling

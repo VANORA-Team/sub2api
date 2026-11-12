@@ -61,7 +61,7 @@ jobs:
         run: |
           go build ./cmd/server
           go test -tags=unit ./internal/service ./internal/repository ./internal/handler ./internal/handler/admin ./migrations \
-            -run 'Test(Pool|.*Pool|OpenAIQuota|CNProvider|.*Cline|.*CommandCode|.*Zhipu|.*HTTP2|.*HTTPUpstream|.*UpstreamBilling|.*AccountExtra|OpenAIResponsesWebSocket_.*BeforeFirstMessageIsInfo|PriorityAnalysisConcurrentScopesHaveBoundedSQLReaders|LockAndMergeAccountProbeExtra)' -count=1
+            -run 'Test(Pool|.*Pool|OpenAIQuota|CNProvider|.*Cline|.*CommandCode|.*Zhipu|.*HTTP2|.*HTTPUpstream|.*UpstreamBilling|.*AccountExtra|OpenAIResponsesWebSocket_.*BeforeFirstMessageIsInfo|PriorityAnalysisConcurrentScopesHaveBoundedSQLReaders|LockAndMergeAccountProbeExtra|CachedAntigravityUsage)' -count=1
 
       - name: Set up pnpm
         if: steps.merge.outputs.build == 'true'
@@ -85,7 +85,10 @@ jobs:
           pnpm run build
           pnpm test:run src/views/admin/ops/components/__tests__/OpsConcurrencyPoolQuota.spec.ts \
             src/components/account/__tests__/CNProviderQuotaCell.spec.ts \
-            src/views/admin/__tests__/UsageView.spec.ts
+            src/views/admin/__tests__/UsageView.spec.ts \
+            src/api/__tests__/admin.accounts.grokModelDiagnostics.spec.ts \
+            src/utils/__tests__/settingsSearch.spec.ts \
+            src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts
 
       - name: Push updated main
         if: steps.merge.outputs.build == 'true'

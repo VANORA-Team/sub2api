@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/cyberevidence"
@@ -714,6 +715,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	bodyReadDone()
 	if err != nil {
+		if middleware2.RejectRequestBodyReadError(c, err) {
+			return
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
@@ -725,6 +729,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	if len(body) == 0 {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		return
+	}
+
+	// Reject invalid UTF-8 before JSON transformation so malformed bytes do not
+	// become retryable upstream errors.
+	if !utf8.Valid(body) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body must be valid UTF-8 JSON. Send UTF-8 encoded bytes.")
 		return
 	}
 
@@ -1275,7 +1286,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if failoverErr.ShouldReportAccountScheduleFailure() {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
-					if service.OpenAIAgentToolResultContinuation(c.Request.Context()) {
+					if service.OpenAIAgentRecoveryNoReplay(c.Request.Context()) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1572,6 +1583,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	bodyReadDone()
 	if err != nil {
+		if middleware2.RejectRequestBodyReadError(c, err) {
+			return
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
@@ -3018,7 +3032,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 	if err := h.gatewayService.CheckAPIKeyLongContext(c.Request.Context(), apiKey, firstMessage, reqModel, service.MapAPIKeyModel(apiKey, reqModel)); err != nil {
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
-		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, apiKeyLongContextWSCloseReason(err))
+		rejectAPIKeyLongContextWS(wsConn, err)
 		return
 	}
 	// Start the connection's single frame reader after the temporary
@@ -3159,7 +3173,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	wsForwardModel := openAIChannelForwardModel(channelMappingWS, wsRouteModel)
 	if err := h.gatewayService.CheckAPIKeyLongContext(ctx, apiKey, firstMessage, reqModel, wsRouteModel, wsForwardModel); err != nil {
 		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
-		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, apiKeyLongContextWSCloseReason(err))
+		rejectAPIKeyLongContextWS(wsConn, err)
 		return
 	}
 
@@ -3957,6 +3971,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					reason = "OpenAI OAuth RPM limit reached; reconnect after the current minute resets"
 				}
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, reason)
+				return
+			}
+			var contextErr *service.APIKeyLongContextError
+			if errors.As(err, &contextErr) {
+				releaseTurnSlots()
+				rejectAPIKeyLongContextWS(wsConn, err)
 				return
 			}
 			if service.IsOpenAIWSSessionPreemptedError(err) {

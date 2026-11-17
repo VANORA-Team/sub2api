@@ -180,8 +180,8 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	}
 
 	var toolTextDecoder *apicompat.DeepSeekToolTextDecoder
-	if !compact && len(chatReq.Tools) > 0 && isDeepSeekSemanticsChatUpstream(account, upstreamModel) {
-		toolTextDecoder = apicompat.NewDeepSeekToolTextDecoder(chatReq.Tools)
+	if !compact && isDeepSeekSemanticsChatUpstream(account, upstreamModel) {
+		toolTextDecoder = apicompat.NewDeepSeekToolTextDecoder(chatReq.Tools, chatReq.ToolChoice)
 	}
 	if clientStream {
 		return s.streamChatCompletionsAsResponses(c, resp, account, originalModel, customTools, functionTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, suppressSummary, startTime, toolTextDecoder)
@@ -374,7 +374,13 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		}, fmt.Errorf("stream usage incomplete: %w", scan.Err)
 	}
 	if toolTextDecoder != nil {
-		chunk, err := toolTextDecoder.Finish(state.FinishReason)
+		var chunk *apicompat.ChatCompletionsChunk
+		var err error
+		if !scan.SawDone && strings.TrimSpace(state.FinishReason) == "" {
+			err = fmt.Errorf("DeepSeek stream ended without a terminal marker")
+		} else {
+			chunk, err = toolTextDecoder.Finish(state.FinishReason)
+		}
 		if err != nil {
 			state.UpstreamError = deepSeekToolTextError(c, requestID, err)
 		} else if chunk != nil {
@@ -603,7 +609,8 @@ func isDeepSeekSemanticsChatUpstream(account *Account, upstreamModel string) boo
 	if isDeepSeekAPIHost(account.GetOpenAIBaseURL()) {
 		return true
 	}
-	return isDeepSeekModelName(upstreamModel)
+	model := strings.TrimPrefix(normalizeOpenCodeGoModelID(upstreamModel), "deepseek/")
+	return isDeepSeekModelName(model)
 }
 
 // deepSeekChatReasoningPlaceholderText 是 Chat Completions 侧 thinking-mode
@@ -738,7 +745,7 @@ func ensureDeepSeekChatReasoningPlaceholders(account *Account, body []byte) []by
 // Never include upstream markup, arguments, or credentials in protocol errors.
 func deepSeekToolTextError(c *gin.Context, requestID string, err error) *apicompat.ResponsesError {
 	const code = "upstream_tool_protocol_error"
-	const message = "DeepSeek returned malformed text tool calls; no text tool call was executed. Retry with a fresh turn."
+	const message = "DeepSeek returned malformed reasoning or text tool markup; the response could not be translated. Retry with a fresh turn."
 	setOpsUpstreamError(c, http.StatusOK, code, message)
 	logger.L().Warn("openai.responses_tool_protocol_error", zap.String("request_id", requestID), zap.Error(err))
 	return &apicompat.ResponsesError{Code: code, Message: message}

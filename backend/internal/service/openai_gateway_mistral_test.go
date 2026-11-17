@@ -279,7 +279,7 @@ func TestMistralBridgeAndRawReaders(t *testing.T) {
 		require.Equal(t, "Hello world", gjson.GetBytes(data, "choices.0.message.content").String())
 	}
 	c, w := mistralTestContext()
-	_, err := s.bufferChatCompletionsAsAnthropic(c, mistralTestResponse(body), account, "fake", "fake", "fake", nil, nil, time.Now())
+	_, err := s.bufferChatCompletionsAsAnthropic(c, mistralTestResponse(body), account, "fake", "fake", "fake", nil, nil, time.Now(), nil)
 	require.NoError(t, err)
 	require.Contains(t, w.Body.String(), `"thinking":"reason two"`)
 	require.Contains(t, w.Body.String(), `"text":"Hello world"`)
@@ -296,7 +296,7 @@ func TestMistralBridgeAndRawReaders(t *testing.T) {
 	// Exercise both complete bridge stream writers with a text/reasoning stream.
 	bridgeStream := "data: " + `{"id":"fake","choices":[{"index":0,"delta":{"content":` + mistralMixed + `},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
 	c, w = mistralTestContext()
-	_, err = s.streamChatCompletionsAsAnthropic(c, mistralTestResponse(bridgeStream), account, "fake", "fake", "fake", nil, nil, time.Now())
+	_, err = s.streamChatCompletionsAsAnthropic(c, mistralTestResponse(bridgeStream), account, "fake", "fake", "fake", nil, nil, time.Now(), nil)
 	require.NoError(t, err)
 	require.Contains(t, w.Body.String(), "reason two")
 	require.Contains(t, w.Body.String(), "Hello world")

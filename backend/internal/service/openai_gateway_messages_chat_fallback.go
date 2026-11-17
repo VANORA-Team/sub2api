@@ -154,10 +154,14 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 
 	// 5. Convert response
-	if clientStream {
-		return s.streamChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	var toolTextDecoder *apicompat.DeepSeekToolTextDecoder
+	if isDeepSeekSemanticsChatUpstream(account, upstreamModel) {
+		toolTextDecoder = apicompat.NewDeepSeekToolTextDecoder(chatReq.Tools, chatReq.ToolChoice)
 	}
-	return s.bufferChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	if clientStream {
+		return s.streamChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, toolTextDecoder)
+	}
+	return s.bufferChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, toolTextDecoder)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
@@ -170,18 +174,27 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	reasoningEffort *string,
 	serviceTier *string,
 	startTime time.Time,
+	toolTextDecoder *apicompat.DeepSeekToolTextDecoder,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	ccResp, usage, err := s.readCCUpstreamJSONResponse(c, resp, account, writeAnthropicError)
 	if err != nil {
 		return nil, err
 	}
-	anthropicResp := apicompat.ChatCompletionsResponseToAnthropic(ccResp, originalModel)
-
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	var protocolErr error
+	if toolTextDecoder != nil && len(ccResp.Choices) > 0 {
+		protocolErr = toolTextDecoder.RecoverMessage(&ccResp.Choices[0].Message, ccResp.Choices[0].FinishReason)
 	}
-	c.JSON(http.StatusOK, anthropicResp)
+	if protocolErr != nil {
+		protocolError := deepSeekToolTextError(c, requestID, protocolErr)
+		writeAnthropicError(c, http.StatusBadGateway, protocolError.Code, protocolError.Message)
+	} else {
+		anthropicResp := apicompat.ChatCompletionsResponseToAnthropic(ccResp, originalModel)
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		c.JSON(http.StatusOK, anthropicResp)
+	}
 
 	return &OpenAIForwardResult{
 		RequestID:                     requestID,
@@ -197,7 +210,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 		ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                        false,
 		Duration:                      time.Since(startTime),
-	}, nil
+	}, protocolErr
 }
 
 func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
@@ -210,6 +223,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	reasoningEffort *string,
 	serviceTier *string,
 	startTime time.Time,
+	toolTextDecoder *apicompat.DeepSeekToolTextDecoder,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
@@ -241,8 +255,36 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		}
 	}
 
-	scan := s.scanCCStream(c, resp, account, "openai messages chat fallback", requestID, startTime, emitChunk)
+	scan := s.scanCCStream(c, resp, account, "openai messages chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) {
+		if toolTextDecoder != nil {
+			chunk = toolTextDecoder.Push(chunk)
+		}
+		emitChunk(chunk)
+	})
 	usage := scan.Usage
+
+	if scan.Err == nil && toolTextDecoder != nil {
+		var chunk *apicompat.ChatCompletionsChunk
+		var err error
+		if !scan.SawDone && strings.TrimSpace(anthropicState.FinishReason) == "" {
+			err = fmt.Errorf("DeepSeek stream ended without a terminal marker")
+		} else {
+			chunk, err = toolTextDecoder.Finish(anthropicState.FinishReason)
+		}
+		if err != nil {
+			scan.Err = err
+			protocolError := deepSeekToolTextError(c, requestID, err)
+			if !clientDisconnected {
+				writeStreamHeaders()
+				if _, writeErr := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(protocolError.Code, protocolError.Message)); writeErr != nil {
+					clientDisconnected = true
+				}
+				c.Writer.Flush()
+			}
+		} else if chunk != nil {
+			emitChunk(chunk)
+		}
+	}
 
 	if scan.Err != nil {
 		// Broken upstream read: skip finalization so no synthetic message_stop

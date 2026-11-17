@@ -215,6 +215,11 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	var toolTextErr error
 	if toolTextDecoder != nil && len(ccResp.Choices) > 0 {
 		toolTextErr = toolTextDecoder.RecoverMessage(&ccResp.Choices[0].Message, ccResp.Choices[0].FinishReason)
+		// The Responses converter already reports native reasoning-only failures
+		// while retaining reasoning IDs, usage, and the requested summary policy.
+		if errors.Is(toolTextErr, apicompat.ErrDeepSeekReasoningOnly) {
+			toolTextErr = nil
+		}
 	}
 	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, functionTools, toolSearch, namespaceTools)
 	if toolTextErr != nil {

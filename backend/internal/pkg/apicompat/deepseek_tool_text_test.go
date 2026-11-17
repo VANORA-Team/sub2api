@@ -225,7 +225,8 @@ func TestDeepSeekThinkingDoesNotLeakMalformedBlocks(t *testing.T) {
 	require.Error(t, NewDeepSeekToolTextDecoder(dsTextTools(), json.RawMessage(`"none"`)).RecoverMessage(&message, "stop"))
 	require.Empty(t, message.ToolCalls)
 	message = ChatMessage{Content: json.RawMessage(`""`), ReasoningContent: "PRIVATE"}
-	require.Error(t, NewDeepSeekToolTextDecoder(nil).RecoverMessage(&message, "stop"))
+	require.ErrorIs(t, NewDeepSeekToolTextDecoder(nil).RecoverMessage(&message, "stop"), ErrDeepSeekReasoningOnly)
+	require.NotErrorIs(t, NewDeepSeekToolTextDecoder(nil).RecoverMessage(&message, "aborted"), ErrDeepSeekReasoningOnly)
 	for _, reason := range []string{"error", "aborted", "unknown"} {
 		require.Error(t, NewDeepSeekToolTextDecoder(nil).RecoverMessage(&ChatMessage{Content: json.RawMessage(`"partial"`)}, reason))
 	}

@@ -2,12 +2,17 @@ package apicompat
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 )
 
 const deepSeekToolTextLimit = 1 << 20
+
+// ErrDeepSeekReasoningOnly lets callers preserve their native reasoning-only
+// error and summary policy without mistaking standard reasoning for bad markup.
+var ErrDeepSeekReasoningOnly = errors.New("DeepSeek returned reasoning without an answer or tool call")
 
 // DeepSeekToolTextDecoder separates reasoning and repairs a complete DSML tool
 // block leaked into content. It is opt-in for DeepSeek requests, and accepts
@@ -404,13 +409,13 @@ func (d *DeepSeekToolTextDecoder) parseCalls(text string) ([]ChatToolCall, error
 func (d *DeepSeekToolTextDecoder) RecoverMessage(message *ChatMessage, finishReason string) error {
 	text := chatMessageContentText(message.Content)
 	d.native = len(message.ToolCalls) > 0
-	if strings.TrimSpace(text) == "" && strings.TrimSpace(message.reasoningText()) != "" && !d.native {
-		return fmt.Errorf("DeepSeek returned reasoning without an answer or tool call")
-	}
 	d.appendPending(text)
 	chunk, err := d.Finish(finishReason)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(text) == "" && strings.TrimSpace(message.reasoningText()) != "" && !d.native {
+		return ErrDeepSeekReasoningOnly
 	}
 	if chunk == nil {
 		return nil
